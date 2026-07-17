@@ -1,10 +1,19 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Single .env lives at the repo root (alongside docker-compose.yml), not under
+# backend/ — resolve it relative to this file so it's found regardless of CWD
+# (uv run from backend/, pytest, scripts/, etc). Safe if missing (e.g. in Docker,
+# where real env vars are injected directly by docker-compose).
+_REPO_ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_REPO_ROOT_ENV_FILE, env_file_encoding="utf-8", extra="ignore"
+    )
 
     postgres_user: str = "prf"
     postgres_password: str = "prf"
