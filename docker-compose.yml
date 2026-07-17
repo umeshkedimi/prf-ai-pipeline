@@ -43,5 +43,27 @@ services:
       timeout: 5s
       retries: 10
 
+  celery-worker:
+    build: ./backend
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      CHECKPOINTER_DATABASE_URL: postgresql://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      MCP_CRM_URL: http://mcp-crm:8100/mcp
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp-crm:
+        condition: service_healthy
+
 volumes:
   pgdata:

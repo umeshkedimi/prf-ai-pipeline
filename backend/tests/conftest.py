@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-import app.db.base as db_base
+from app.db.base import reset_engine
 from app.db.session import db_session as db_session_cm
 
 # Must match scripts/seed_db.py's NAMESPACE — kept in sync manually since the two
@@ -17,15 +17,10 @@ def seed_uuid(*parts: str) -> uuid.UUID:
 
 @pytest.fixture(autouse=True)
 async def _reset_db_engine():
-    """app.db.base caches the engine/sessionmaker per-process (correct for a real
-    single-event-loop process). pytest-asyncio gives each test its own event loop,
-    so the cached engine must be torn down and recreated between tests or asyncpg
-    connections end up bound to a closed loop."""
+    """pytest-asyncio gives each test its own event loop; see reset_engine()'s
+    docstring for why the cached engine can't survive across loops."""
     yield
-    if db_base._engine is not None:
-        await db_base._engine.dispose()
-    db_base._engine = None
-    db_base._sessionmaker = None
+    await reset_engine()
 
 
 @pytest.fixture
