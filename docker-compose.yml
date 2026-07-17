@@ -27,5 +27,21 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp-crm:
+    build: ./backend
+    command: ["python", "-m", "app.mcp_servers.crm.server"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+    ports:
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8100), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
