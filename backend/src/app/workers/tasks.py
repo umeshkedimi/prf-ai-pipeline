@@ -3,11 +3,14 @@ import uuid
 from datetime import UTC, datetime
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.db.base import reset_engine
 from app.db.models import WorkflowRun
 from app.db.session import db_session
 from app.graph.builder import build_graph
 from app.workers.celery_app import celery_app
+
+log = get_logger(__name__)
 
 
 @celery_app.task(name="run_donor_verification_workflow")
@@ -26,6 +29,7 @@ async def _run(workflow_run_id: str) -> None:
         async with db_session() as session:
             run = await session.get(WorkflowRun, run_uuid)
             if run is None:
+                log.warning("workflow_run.not_found", workflow_run_id=workflow_run_id)
                 return
             run.status = "running"
             run.current_agent = "donor_verification"
@@ -33,6 +37,8 @@ async def _run(workflow_run_id: str) -> None:
             await session.commit()
             donor_id = str(run.donor_id)
             campaign_id = str(run.campaign_id) if run.campaign_id else None
+
+        log.info("workflow_run.started", workflow_run_id=workflow_run_id, donor_id=donor_id)
 
         try:
             async with build_graph() as graph:
@@ -59,6 +65,14 @@ async def _run(workflow_run_id: str) -> None:
                 run.completed_at = datetime.now(UTC)
                 await session.commit()
 
+            log.info(
+                "workflow_run.finished",
+                workflow_run_id=workflow_run_id,
+                status=status,
+                confidence=confidence,
+                eligible=verdict.get("eligible"),
+            )
+
         except Exception as exc:
             async with db_session() as session:
                 run = await session.get(WorkflowRun, run_uuid)
@@ -66,6 +80,7 @@ async def _run(workflow_run_id: str) -> None:
                 run.error = str(exc)
                 run.completed_at = datetime.now(UTC)
                 await session.commit()
+            log.error("workflow_run.failed", workflow_run_id=workflow_run_id, error=str(exc))
             raise
     finally:
         await reset_engine()
