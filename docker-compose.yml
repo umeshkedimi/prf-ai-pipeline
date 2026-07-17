@@ -1,0 +1,31 @@
+name: prf-ai-pipeline
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-prf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prf}
+      POSTGRES_DB: ${POSTGRES_DB:-prf_ai_pipeline}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prf} -d ${POSTGRES_DB:-prf_ai_pipeline}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
