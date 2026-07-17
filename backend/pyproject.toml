@@ -47,6 +47,7 @@ markers = [
     "integration: real-stack tests (Postgres, MCP, live LLM) — opt in with -m integration",
 ]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
