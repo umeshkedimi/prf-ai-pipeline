@@ -65,5 +65,33 @@ services:
       mcp-crm:
         condition: service_healthy
 
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      CHECKPOINTER_DATABASE_URL: postgresql://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      MCP_CRM_URL: http://mcp-crm:8100/mcp
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp-crm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
