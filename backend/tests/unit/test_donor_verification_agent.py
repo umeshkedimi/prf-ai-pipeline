@@ -3,10 +3,24 @@ mocks the LLM and CRM MCP tools entirely, so no network/API calls are made."""
 
 import json
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from app.agents.donor_verification import agent as agent_module
 from app.agents.donor_verification.schemas import VerificationResult
+
+
+@pytest.fixture(autouse=True)
+def _mock_audit_log(monkeypatch):
+    """Node functions write to Postgres via write_audit_log — stub it out so
+    these tests stay fast/offline and just record what would have been logged."""
+    calls: list[dict] = []
+
+    async def fake_write_audit_log(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(agent_module, "write_audit_log", fake_write_audit_log)
+    return calls
 
 
 class FakeTool:
@@ -48,7 +62,7 @@ class FakeLLM:
         return FakeStructuredLLM(self._structured_result)
 
 
-async def test_fetch_core_data_parses_donor_profile(monkeypatch):
+async def test_fetch_core_data_parses_donor_profile(monkeypatch, _mock_audit_log):
     profile_json = json.dumps(
         {
             "donor_id": "abc-123",
@@ -76,14 +90,19 @@ async def test_fetch_core_data_parses_donor_profile(monkeypatch):
 
     monkeypatch.setattr(agent_module, "get_crm_tools", fake_get_crm_tools)
 
-    result = await agent_module.fetch_core_data({"donor_id": "abc-123"})
+    state = {"workflow_run_id": "wf-1", "donor_id": "abc-123"}
+    result = await agent_module.fetch_core_data(state)
 
     assert result["donor_profile"]["first_name"] == "Eleanor"
     assert result["donor_profile"]["do_not_contact"] is False
     assert donor_profile_tool.calls == [{"donor_id": "abc-123"}]
 
+    assert len(_mock_audit_log) == 1
+    assert _mock_audit_log[0]["step"] == "fetch_core_data"
+    assert _mock_audit_log[0]["workflow_run_id"] == "wf-1"
 
-async def test_gather_context_runs_tool_loop_and_collects_results(monkeypatch):
+
+async def test_gather_context_runs_tool_loop_and_collects_results(monkeypatch, _mock_audit_log):
     donation_tool = FakeTool(
         "get_donation_history",
         [
@@ -140,6 +159,7 @@ async def test_gather_context_runs_tool_loop_and_collects_results(monkeypatch):
     monkeypatch.setattr(agent_module, "get_llm", lambda: fake_llm)
 
     state = {
+        "workflow_run_id": "wf-1",
         "donor_id": "abc-123",
         "donor_profile": {
             "first_name": "Eleanor",
@@ -155,8 +175,12 @@ async def test_gather_context_runs_tool_loop_and_collects_results(monkeypatch):
     assert donation_tool.calls == [{"donor_id": "abc-123"}]
     assert len(dup_tool.calls) == 1
 
+    assert len(_mock_audit_log) == 1
+    assert _mock_audit_log[0]["step"] == "gather_context"
+    assert len(_mock_audit_log[0]["tool_calls"]) == 2
 
-async def test_gather_context_stops_when_llm_calls_no_tools(monkeypatch):
+
+async def test_gather_context_stops_when_llm_calls_no_tools(monkeypatch, _mock_audit_log):
     async def fake_get_crm_tools():
         return {
             "get_donor_profile": FakeTool("get_donor_profile", "{}"),
@@ -169,13 +193,15 @@ async def test_gather_context_stops_when_llm_calls_no_tools(monkeypatch):
     fake_llm = FakeLLM(tool_responses=[AIMessage(content="nothing to check", tool_calls=[])])
     monkeypatch.setattr(agent_module, "get_llm", lambda: fake_llm)
 
-    result = await agent_module.gather_context({"donor_id": "abc-123", "donor_profile": {}})
+    result = await agent_module.gather_context(
+        {"workflow_run_id": "wf-1", "donor_id": "abc-123", "donor_profile": {}}
+    )
 
     assert result["donation_history"] == []
     assert result["duplicate_candidates"] == []
 
 
-async def test_synthesize_verdict_returns_model_dump(monkeypatch):
+async def test_synthesize_verdict_returns_model_dump(monkeypatch, _mock_audit_log):
     expected = VerificationResult(
         eligible=False,
         confidence=0.98,
@@ -188,6 +214,7 @@ async def test_synthesize_verdict_returns_model_dump(monkeypatch):
     monkeypatch.setattr(agent_module, "get_llm", lambda: fake_llm)
 
     state = {
+        "workflow_run_id": "wf-1",
         "donor_profile": {"do_not_contact": True},
         "donation_history": [],
         "duplicate_candidates": [],
@@ -195,3 +222,5 @@ async def test_synthesize_verdict_returns_model_dump(monkeypatch):
     result = await agent_module.synthesize_verdict(state)
 
     assert result["verification_result"] == expected.model_dump()
+    assert _mock_audit_log[0]["confidence"] == 0.98
+    assert _mock_audit_log[0]["reasoning"] == "do_not_contact is true"
