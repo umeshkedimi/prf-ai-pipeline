@@ -84,7 +84,11 @@ async def test_suspicious_donation_flagged_for_review():
         )
 
     steps = [row.step for row in rows]
-    assert steps == ["fetch_core_data", "gather_context", "synthesize_verdict"]
-    assert rows[-1].confidence is not None
-    assert rows[-1].reasoning
+    # d-0006 is eligible, so (as of Phase 2) the graph continues past
+    # verification into Address Intelligence — this test only cares about
+    # verification's own 3 steps, which must still be first and unchanged.
+    assert steps[:3] == ["fetch_core_data", "gather_context", "synthesize_verdict"]
+    verdict_row = rows[2]
+    assert verdict_row.confidence is not None
+    assert verdict_row.reasoning
     assert rows[1].tool_calls  # gather_context recorded its MCP tool calls

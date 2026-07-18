@@ -58,13 +58,17 @@ async def test_crash_after_gather_context_then_resume_does_not_rerun_completed_n
         timeout=60,
     )
     assert resume_proc.returncode == 0, resume_proc.stderr
-    verdict = json.loads(resume_proc.stdout)
-    assert verdict["eligible"] is True
+    result = json.loads(resume_proc.stdout)
+    assert result["donor_verification"]["eligible"] is True
 
     # the operative claim: fetch_core_data and gather_context ran exactly once
-    # each, before the crash — resume only added synthesize_verdict.
+    # each, before the crash — resume continued on into Address Intelligence
+    # (d-0001 is eligible with a clean address, so it auto-completes with no
+    # interrupt) without re-running either of the pre-crash steps.
     assert await _audit_steps(workflow_run_id) == [
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
+        "verify_address",
+        "assess_and_normalize",
     ]
