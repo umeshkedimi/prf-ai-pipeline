@@ -1,1 +1,1 @@
-"""Address MCP server — placeholder, built in Phase 2."""
+"""Address MCP server — validate, standardize, and forward-lookup mailing addresses."""
