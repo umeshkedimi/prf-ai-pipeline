@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -8,6 +9,13 @@ from pydantic import BaseModel, ConfigDict
 class WorkflowRunCreate(BaseModel):
     donor_id: str  # our internal donor UUID, or the CRM's external_id (e.g. "d-0006")
     campaign_id: str | None = None
+
+
+class ReviewDecisionCreate(BaseModel):
+    action: Literal["approve", "reject", "modify"]
+    updated_address: str | None = None
+    reviewer: str | None = None
+    notes: str | None = None
 
 
 class AuditLogEntry(BaseModel):
@@ -34,6 +42,7 @@ class WorkflowRunRead(BaseModel):
     current_agent: str | None = None
     result: dict | None = None
     confidence: Decimal | None = None
+    pending_review: dict | None = None
     error: str | None = None
     created_at: datetime
     started_at: datetime | None = None

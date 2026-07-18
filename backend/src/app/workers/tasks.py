@@ -1,6 +1,9 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from typing import Any
+
+from langgraph.types import Command
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -13,15 +16,20 @@ from app.workers.celery_app import celery_app
 log = get_logger(__name__)
 
 
-@celery_app.task(name="run_donor_verification_workflow")
-def run_donor_verification_workflow(workflow_run_id: str) -> None:
+@celery_app.task(name="run_workflow")
+def run_workflow(workflow_run_id: str) -> None:
     """Sync Celery entrypoint (default prefork pool) bridging into the async
     graph. Each call gets a fresh event loop via asyncio.run(), so the cached
     DB engine must be reset around it — see db/base.py:reset_engine()."""
-    asyncio.run(_run(workflow_run_id))
+    asyncio.run(_run(workflow_run_id, resume_command=None))
 
 
-async def _run(workflow_run_id: str) -> None:
+@celery_app.task(name="resume_workflow_after_review")
+def resume_workflow_after_review(workflow_run_id: str, decision: dict) -> None:
+    asyncio.run(_run(workflow_run_id, resume_command=Command(resume=decision)))
+
+
+async def _run(workflow_run_id: str, resume_command: Command | None) -> None:
     await reset_engine()
     try:
         run_uuid = uuid.UUID(workflow_run_id)
@@ -32,46 +40,42 @@ async def _run(workflow_run_id: str) -> None:
                 log.warning("workflow_run.not_found", workflow_run_id=workflow_run_id)
                 return
             run.status = "running"
-            run.current_agent = "donor_verification"
-            run.started_at = datetime.now(UTC)
+            run.started_at = run.started_at or datetime.now(UTC)
+            run.pending_review = None
             await session.commit()
             donor_id = str(run.donor_id)
             campaign_id = str(run.campaign_id) if run.campaign_id else None
 
-        log.info("workflow_run.started", workflow_run_id=workflow_run_id, donor_id=donor_id)
+        log.info(
+            "workflow_run.started",
+            workflow_run_id=workflow_run_id,
+            donor_id=donor_id,
+            resuming=resume_command is not None,
+        )
 
         try:
+            graph_input: Any = (
+                resume_command
+                if resume_command is not None
+                else {
+                    "workflow_run_id": workflow_run_id,
+                    "donor_id": donor_id,
+                    "campaign_id": campaign_id,
+                }
+            )
             async with build_graph() as graph:
+                # durability="sync" persists each checkpoint before the next
+                # step starts, not while it executes (the default). Matters
+                # far more here than in a single-agent graph: an interrupted
+                # workflow's paused state might not resume for hours or days
+                # and absolutely cannot be lost.
                 result = await graph.ainvoke(
-                    {
-                        "workflow_run_id": workflow_run_id,
-                        "donor_id": donor_id,
-                        "campaign_id": campaign_id,
-                    },
+                    graph_input,
                     config={"configurable": {"thread_id": workflow_run_id}},
+                    durability="sync",
                 )
 
-            verdict = result["verification_result"]
-            confidence = verdict["confidence"]
-            threshold = get_settings().confidence_threshold_donor_verification
-            status = "completed" if confidence >= threshold else "needs_review"
-
-            async with db_session() as session:
-                run = await session.get(WorkflowRun, run_uuid)
-                run.status = status
-                run.current_agent = "donor_verification"
-                run.result = verdict
-                run.confidence = confidence
-                run.completed_at = datetime.now(UTC)
-                await session.commit()
-
-            log.info(
-                "workflow_run.finished",
-                workflow_run_id=workflow_run_id,
-                status=status,
-                confidence=confidence,
-                eligible=verdict.get("eligible"),
-            )
+            await _handle_result(run_uuid, workflow_run_id, result)
 
         except Exception as exc:
             async with db_session() as session:
@@ -84,3 +88,63 @@ async def _run(workflow_run_id: str) -> None:
             raise
     finally:
         await reset_engine()
+
+
+async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict) -> None:
+    """Interprets the graph's output and updates workflow_runs. Shared by the
+    initial run and the post-review resume, since both end up here via the
+    same ainvoke() call in _run()."""
+    settings = get_settings()
+
+    if interrupts := result.get("__interrupt__"):
+        payload = interrupts[0].value
+        async with db_session() as session:
+            run = await session.get(WorkflowRun, run_uuid)
+            run.status = "awaiting_review"
+            run.current_agent = "human_review"
+            run.pending_review = payload
+            await session.commit()
+        log.info("workflow_run.awaiting_review", workflow_run_id=workflow_run_id)
+        return
+
+    aggregate: dict[str, Any] = {}
+    if result.get("verification_result") is not None:
+        aggregate["donor_verification"] = result["verification_result"]
+    if result.get("address_result") is not None:
+        aggregate["address_intelligence"] = result["address_result"]
+    if result.get("human_review_decision") is not None:
+        aggregate["human_review"] = result["human_review_decision"]
+
+    if result.get("human_review_decision") is not None:
+        # A human already made the call on this workflow — that's authoritative,
+        # no further confidence-threshold gating applies, regardless of the
+        # (honestly preserved) original confidence number in address_result.
+        status = "completed"
+        confidence = result.get("address_result", {}).get("confidence")
+        current_agent = "human_review"
+    elif result.get("address_result") is not None:
+        ar = result["address_result"]
+        confidence = ar["confidence"]
+        status = "completed" if confidence >= settings.confidence_threshold_address_intelligence else "needs_review"
+        current_agent = "address_intelligence"
+    else:
+        vr = result["verification_result"]
+        confidence = vr["confidence"]
+        status = "completed" if confidence >= settings.confidence_threshold_donor_verification else "needs_review"
+        current_agent = "donor_verification"
+
+    async with db_session() as session:
+        run = await session.get(WorkflowRun, run_uuid)
+        run.status = status
+        run.current_agent = current_agent
+        run.result = aggregate
+        run.confidence = confidence
+        run.completed_at = datetime.now(UTC)
+        await session.commit()
+
+    log.info(
+        "workflow_run.finished",
+        workflow_run_id=workflow_run_id,
+        status=status,
+        confidence=confidence,
+    )

@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.db.models import AgentAuditLog, Donor, WorkflowRun
-from app.schemas.workflow import AuditLogEntry, WorkflowRunCreate, WorkflowRunRead
-from app.workers.tasks import run_donor_verification_workflow
+from app.schemas.workflow import AuditLogEntry, ReviewDecisionCreate, WorkflowRunCreate, WorkflowRunRead
+from app.workers.tasks import resume_workflow_after_review
+from app.workers.tasks import run_workflow as run_workflow_task
 
 router = APIRouter()
 
@@ -34,9 +35,9 @@ async def _resolve_donor_id(session: AsyncSession, donor_id: str) -> uuid.UUID:
 async def run_workflow(
     payload: WorkflowRunCreate, session: AsyncSession = Depends(get_db)
 ) -> WorkflowRun:
-    """Enqueues the Donor Verification workflow and returns immediately —
-    the API never invokes the LangGraph graph itself, Celery does (see
-    workers/tasks.py). Poll GET /workflow/{id} for status."""
+    """Enqueues the pipeline and returns immediately — the API never invokes
+    the LangGraph graph itself, Celery does (see workers/tasks.py). Poll
+    GET /workflow/{id} for status."""
     donor_uuid = await _resolve_donor_id(session, payload.donor_id)
     campaign_uuid = uuid.UUID(payload.campaign_id) if payload.campaign_id else None
 
@@ -45,7 +46,7 @@ async def run_workflow(
     await session.commit()
     await session.refresh(run)
 
-    run_donor_verification_workflow.delay(str(run.id))
+    run_workflow_task.delay(str(run.id))
     return run
 
 
@@ -74,3 +75,24 @@ async def get_workflow(
         )
         response.audit_log = [AuditLogEntry.model_validate(row) for row in rows]
     return response
+
+
+@router.post("/workflow/{workflow_run_id}/review", response_model=WorkflowRunRead, status_code=202)
+async def submit_review(
+    workflow_run_id: uuid.UUID,
+    payload: ReviewDecisionCreate,
+    session: AsyncSession = Depends(get_db),
+) -> WorkflowRun:
+    """Submits a human decision for a workflow paused on a real LangGraph
+    interrupt() and re-enqueues it to resume from exactly where it stopped."""
+    run = await session.get(WorkflowRun, workflow_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="workflow run not found")
+    if run.status != "awaiting_review":
+        raise HTTPException(
+            status_code=409,
+            detail=f"workflow run is '{run.status}', not awaiting_review — nothing to resume",
+        )
+
+    resume_workflow_after_review.delay(str(run.id), payload.model_dump())
+    return run
