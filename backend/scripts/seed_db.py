@@ -26,9 +26,9 @@ CAMPAIGNS = [
     {"name": "Major Gifts Initiative", "appeal_code": "MGI", "status": "active"},
 ]
 
-# One donor per Donor Verification scenario: clean, duplicate pair, do-not-contact,
-# suppressed (deceased), suspicious (PO box + donation far above historical pattern),
-# malformed (missing contact info), and a second clean donor for confidence contrast.
+# d-0001 through d-0008: one donor per Donor Verification scenario (clean, duplicate
+# pair, do-not-contact, suppressed/deceased, suspicious, malformed/missing contact info).
+# d-0009/d-0010 (Phase 2): Address Intelligence scenarios not covered above.
 DONORS = [
     {
         "external_id": "d-0001",
@@ -146,6 +146,36 @@ DONORS = [
         "notes": "clean, recurring small-dollar donor",
         "campaign": "2026 Spring Appeal",
         "donations": [(20.00, date(2025, 9, 10)), (25.00, date(2026, 3, 10))],
+    },
+    # Phase 2 additions: eligible per Donor Verification, but each exercises a
+    # distinct Address Intelligence branch not covered by d-0001 through d-0008.
+    {
+        "external_id": "d-0009",
+        "first_name": "Nathaniel",
+        "last_name": "Cross",
+        "email": "nathaniel.cross@example.com",
+        "address_line1": "410 Willow St",
+        "city": "Denver",
+        "state": "CO",
+        "postal_code": "80203",
+        "do_not_contact": False,
+        "notes": "address intelligence: moved, forwarding address found but uncertain",
+        "campaign": "2026 Spring Appeal",
+        "donations": [(50.00, date(2025, 8, 4))],
+    },
+    {
+        "external_id": "d-0010",
+        "first_name": "Carla",
+        "last_name": "Jennings",
+        "email": "carla.jennings@example.com",
+        "address_line1": "999 Ghost Ave",
+        "city": "Detroit",
+        "state": "MI",
+        "postal_code": "48201",
+        "do_not_contact": False,
+        "notes": "address intelligence: vacant/undeliverable, no forwarding found",
+        "campaign": "Year-End Giving",
+        "donations": [(35.00, date(2025, 10, 22))],
     },
 ]
 
