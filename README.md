@@ -44,7 +44,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | Phase | Scope |
 |---|---|
 | **1** ✅ done | Repo foundations, DB schema, Donor Verification agent end-to-end (real Postgres, real CRM MCP server, real LLM call, LangGraph checkpointing, Celery + FastAPI wiring) |
-| 2 | Address Intelligence agent + Address MCP + first `interrupt()`-based Human Review node + confidence routing |
+| **2** ✅ done | Address Intelligence agent + Address MCP + first real `interrupt()`-based Human Review node + confidence routing, chained after Donor Verification |
 | 3 | Donation Recommendation agent + pgvector RAG over campaign knowledge docs |
 | 4 | Campaign Personalization agent |
 | 5 | Compliance agent + Compliance MCP |
@@ -54,17 +54,44 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 
 See `docs/` (added as phases land) for architecture diagrams and design notes.
 
-### Phase 1 in detail
+### The graph so far
 
-The Donor Verification agent runs as 3 LangGraph nodes, each a real checkpoint boundary:
+```
+START → fetch_core_data → gather_context → synthesize_verdict
+           │
+           ├─ ineligible → END
+           │
+           └─ eligible → verify_address → assess_and_normalize
+                            │
+                            ├─ confidence ≥ threshold → END
+                            │
+                            └─ confidence < threshold → human_review [real interrupt()]
+                                            │
+                                            └─ END  (Phase 3+ continues here)
+```
+
+**Donor Verification** (Phase 1) — 3 nodes, each a real checkpoint boundary:
 
 1. **`fetch_core_data`** — deterministic `get_donor_profile` MCP call. `do_not_contact`/suppression flags are read as-is, never inferred by the LLM.
 2. **`gather_context`** — an LLM bound to `get_donation_history` + `find_potential_duplicate_donors` (via `langchain-mcp-adapters`, a real streamable-HTTP MCP server), a bounded tool-calling loop.
-3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). Compliance rules (do-not-contact, suppression) are enforced by explicit instruction, never left to model judgment.
+3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). Compliance rules (do-not-contact, suppression) are enforced by explicit instruction, never left to model judgment. "Eligible" is scoped strictly to compliance/legitimacy — it's explicitly told *not* to factor in address deliverability, which is a separate downstream concern.
+
+**Address Intelligence** (Phase 2) — 2 nodes, only reached if the donor is eligible:
+
+1. **`verify_address`** — deterministic `verify_address` MCP call. Donors with no address on file skip the call entirely.
+2. **`assess_and_normalize`** — deterministically calls `lookup_new_address` when `verify_address` flagged `moved=true` (that lookup is a business rule, not a judgment call), then an LLM produces the final structured `AddressResult` (`deliverable`, `confidence`, `updated_address`, `moved`, `reasoning[]`).
+
+**Human Review** (Phase 2) — the platform's first genuine pause: a real LangGraph `interrupt()`, not a status flag. Only Address Intelligence's low confidence triggers it — Donor Verification's own low-confidence outcomes (duplicate/suspicious) stay advisory-only, per the original spec's human-review trigger list (address confidence, ask amount, compliance, missing info — not "possible duplicate"). The workflow genuinely cannot proceed until a decision (`approve`/`reject`/`modify`) is submitted via `POST /workflow/{id}/review`.
 
 Every node writes a row to `agent_audit_log` (input snapshot, output, confidence, reasoning, tool calls, model, latency) — the explainability trail exposed via `GET /workflow/{id}?verbose=true`.
 
-`workflow_runs.status` is set purely from confidence vs. `CONFIDENCE_THRESHOLD_DONOR_VERIFICATION` (default 0.80): `completed` above threshold, `needs_review` below — regardless of whether the verdict was eligible or ineligible. A highly-confident "ineligible, do-not-contact" decision doesn't need a human; a shaky "eligible but maybe-duplicate" one does.
+**Status semantics:**
+- `pending` / `running` — self-explanatory.
+- `awaiting_review` — the graph is genuinely paused on an interrupt; `pending_review` holds the payload. Cannot proceed without `POST /workflow/{id}/review`.
+- `needs_review` — an advisory, *non-blocking* flag: the graph already reached `END`, nothing is stuck, it just means a low-confidence outcome is worth a human glance eventually.
+- `completed` — reached `END` cleanly, or a paused workflow was resumed with a decision (a human's call is authoritative — no further confidence gating applies once one has weighed in).
+
+`workflow_runs.result` aggregates every agent that ran: `{"donor_verification": {...}, "address_intelligence": {...}|omitted, "human_review": {...}|omitted}` — a reviewer sees the whole picture, not just the last agent's output.
 
 ## Development
 
@@ -84,38 +111,53 @@ uv sync --extra dev
 uv run alembic upgrade head
 uv run python scripts/seed_db.py
 cd ..
-docker compose up -d --build mcp-crm celery-worker api
+docker compose up -d --build mcp-crm mcp-address celery-worker api
 ```
 
-### Demo: trigger a workflow via the API
+### Demo: the full human-in-the-loop loop via the API
 
 ```bash
 curl -X POST localhost:8000/api/v1/workflow/run \
-  -H "Content-Type: application/json" -d '{"donor_id": "d-0006"}'
+  -H "Content-Type: application/json" -d '{"donor_id": "d-0009"}'
 # -> {"id": "<workflow_run_id>", "status": "pending", ...}
 
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
+# -> status: awaiting_review, current_agent: human_review,
+#    pending_review: { reason: "address_confidence_below_threshold",
+#      address_result: { moved: true, confidence: 0.6,
+#        updated_address: "1225 Pine St, Denver, CO 80218",
+#        reasoning: ["...forwarding lookup found a new address...but with only
+#                     moderate confidence (0.6)...", ...] },
+#      donor_profile: { first_name: "Nathaniel", ... } }
+#    — the graph is genuinely paused here; it will not proceed on its own.
+
+curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
+  -H "Content-Type: application/json" \
+  -d '{"action": "modify", "updated_address": "1225 Pine St, Denver, CO 80218", "reviewer": "demo", "notes": "Confirmed via phone"}'
+# -> 202, re-enqueued to resume from exactly where it stopped
+
 curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
-# -> status: needs_review, confidence: 0.55, is_suspicious: true,
-#    reasoning: ["...$50,000 donation is drastically higher than prior gifts
-#                 of $75 and $60...", "...PO Box address...matches the
-#                 donor's own notes flagging this as suspicious", ...],
-#    audit_log: [ {step: fetch_core_data, ...}, {step: gather_context,
-#                  tool_calls: [...]}, {step: synthesize_verdict, ...} ]
+# -> status: completed, confidence: 0.6 (preserved honestly, not inflated),
+#    result: { donor_verification: {...}, address_intelligence: { human_reviewed: true, ... },
+#               human_review: { action: "modify", reviewer: "demo", ... } },
+#    audit_log: 6 rows spanning both agents plus the human decision
 ```
 
-`donor_id` accepts either the CRM's `external_id` (e.g. `"d-0006"`, as seeded) or our internal UUID directly.
+`donor_id` accepts either the CRM's `external_id` (e.g. `"d-0009"`, as seeded) or our internal UUID directly.
 
-The seed dataset (`backend/scripts/seed_db.py`) covers every verification branch — run all eight and every one resolves as expected:
+The seed dataset (`backend/scripts/seed_db.py`, 10 donors) covers every branch through both agents — running all ten through the real stack gives exactly:
 
-| donor | scenario | result |
+| donor | scenario | final status |
 |---|---|---|
-| d-0001 | clean donor | `completed`, eligible, confidence 0.95 |
-| d-0002 / d-0003 | duplicate pair (fuzzy name+address match) | both `needs_review`, cross-reference each other as `duplicate_of_donor_id` |
-| d-0004 | do-not-contact | `completed`, ineligible, confidence 0.98 (high-confidence "no" needs no review) |
-| d-0005 | suppressed (deceased) | `completed`, ineligible, confidence 0.98 |
-| d-0006 | suspicious ($50k gift vs. $60-75 history, PO box) | `needs_review`, confidence 0.55 |
-| d-0007 | malformed (missing address/email) | `needs_review`, confidence 0.45 |
-| d-0008 | clean recurring small donor | `completed`, eligible, confidence 0.97 |
+| d-0001 | clean donor, clean address | `completed`, confidence ~0.97 |
+| d-0002 / d-0003 | duplicate pair (advisory-only, doesn't block), clean addresses | `completed` — the duplicate flag stays visible in `result.donor_verification` |
+| d-0004 | do-not-contact | `completed`, ineligible (graph ends before address intelligence) |
+| d-0005 | suppressed (deceased) | `completed`, ineligible |
+| d-0006 | suspicious donation (advisory-only), PO box address (clears threshold) | `completed` |
+| d-0007 | malformed — no address on file | `awaiting_review` → after decision → `completed` |
+| d-0008 | clean recurring small donor | `completed`, confidence ~0.97 |
+| d-0009 | moved, forwarding address found but uncertain | `awaiting_review` → after decision → `completed` |
+| d-0010 | vacant/undeliverable, no forwarding found | `awaiting_review` → after decision → `completed` |
 
 ### Demo: checkpoint/resume against a real process crash
 
@@ -124,19 +166,20 @@ cd backend
 uv run python scripts/run_workflow_cli.py demo-crash-resume --donor-id d-0002
 ```
 
-This spawns a subprocess that runs `fetch_core_data` → `gather_context`, confirms `gather_context`'s checkpoint is durably persisted in Postgres (via an independent `aget_state()` read-back — see the script's docstring for why the `astream` checkpoint event alone isn't a trustworthy durability signal), then `os._exit(1)`s before `synthesize_verdict` ever starts — a genuine process death, not a graceful pause. The parent process then inspects what actually persisted, resumes in a fresh graph/checkpointer instance, and asserts `fetch_core_data`/`gather_context` did not re-run.
+This spawns a subprocess that runs `fetch_core_data` → `gather_context`, confirms `gather_context`'s checkpoint is durably persisted in Postgres (via an independent `aget_state()` read-back — see the script's docstring for why the `astream` checkpoint event alone isn't a trustworthy durability signal), then `os._exit(1)`s before `synthesize_verdict` ever starts — a genuine process death, not a graceful pause. The parent process then inspects what actually persisted, resumes in a fresh graph/checkpointer instance (now continuing on through Address Intelligence too, since d-0002 is eligible), and asserts `fetch_core_data`/`gather_context` did not re-run.
 
 Other CLI commands:
 
 ```bash
-uv run python scripts/run_workflow_cli.py run --donor-id d-0001        # full run, no crash
-uv run python scripts/run_workflow_cli.py resume --workflow-run-id <id>  # resume any existing thread
+uv run python scripts/run_workflow_cli.py run --donor-id d-0001                          # full run, no crash
+uv run python scripts/run_workflow_cli.py resume --workflow-run-id <id>                   # continue a thread with no pending interrupt (e.g. after a crash)
+uv run python scripts/run_workflow_cli.py review --workflow-run-id <id> --action approve  # submit a human-review decision
 ```
 
 ### Tests
 
 ```bash
 cd backend
-uv run pytest                # fast unit tests, mocked LLM + MCP (~0.2s)
-uv run pytest -m integration  # real stack: live LLM calls, real MCP server, real Postgres (~2min)
+uv run pytest                # fast unit tests, mocked LLM + MCP (~0.3s)
+uv run pytest -m integration  # real stack: live LLM calls, both MCP servers, real Postgres (~2-3min)
 ```
