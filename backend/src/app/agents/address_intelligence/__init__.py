@@ -1,1 +1,1 @@
-"""Address Intelligence Agent — placeholder, built in Phase 2."""
+"""Address Intelligence Agent — validates, normalizes, and re-verifies donor mailing addresses."""

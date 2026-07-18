@@ -1,1 +1,2 @@
-"""Human Review Agent (LangGraph interrupt-based) — placeholder, built in Phase 2."""
+"""Human Review Agent — pauses the graph via a real LangGraph interrupt() when
+an upstream agent's confidence falls below its threshold."""
