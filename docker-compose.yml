@@ -43,6 +43,17 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp-address:
+    build: ./backend
+    command: ["python", "-m", "app.mcp_servers.address.server"]
+    ports:
+      - "8101:8101"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8101), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   celery-worker:
     build: ./backend
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
@@ -54,6 +65,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp
+      MCP_ADDRESS_URL: http://mcp-address:8101/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -63,6 +75,8 @@ services:
       redis:
         condition: service_healthy
       mcp-crm:
+        condition: service_healthy
+      mcp-address:
         condition: service_healthy
 
   api:
@@ -75,6 +89,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp
+      MCP_ADDRESS_URL: http://mcp-address:8101/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -86,6 +101,8 @@ services:
       redis:
         condition: service_healthy
       mcp-crm:
+        condition: service_healthy
+      mcp-address:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
