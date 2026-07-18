@@ -20,6 +20,13 @@ Rules you must follow exactly (these are compliance requirements, not your judgm
 - If do_not_contact is true, eligible MUST be false.
 - If is_suppressed is true, eligible MUST be false.
 
+"Eligible" is about whether this is a legitimate CRM record we're allowed to mail —
+compliance status, duplicate/fraud risk. It is NOT about whether the address is
+currently deliverable (that is a separate downstream Address Intelligence agent's job,
+even if the notes field happens to mention returned mail or a possible move). Do not
+lower eligible or confidence because of address-deliverability concerns; only compliance,
+duplication, and donation-pattern concerns belong to this decision.
+
 For everything else, use your judgment:
 - Is this donor likely a duplicate of another record in the system? If the top duplicate \
   candidate has high name AND address similarity (roughly >0.5 each), treat it as a likely \

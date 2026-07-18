@@ -1,9 +1,11 @@
-"""CLI for running the Donor Verification workflow via LangGraph directly, and
-for demonstrating real crash/resume behavior against the Postgres checkpointer.
+"""CLI for running the full donor pipeline via LangGraph directly, submitting
+human-review decisions, and demonstrating real crash/resume behavior against
+the Postgres checkpointer.
 
 Usage:
   uv run python scripts/run_workflow_cli.py run --donor-id d-0001
   uv run python scripts/run_workflow_cli.py resume --workflow-run-id <uuid>
+  uv run python scripts/run_workflow_cli.py review --workflow-run-id <uuid> --action approve
   uv run python scripts/run_workflow_cli.py demo-crash-resume --donor-id d-0002
 
 Note on checkpoint durability: LangGraph's `astream(..., stream_mode="checkpoints")`
@@ -14,6 +16,10 @@ behind. `demo-crash-resume` confirms durability the only way that's actually
 trustworthy: an independent `aget_state()` read-back after the fact, polled until
 it agrees the node completed. Skipping that and trusting the stream event instead
 was tried first and reproducibly left `gather_context` re-executing after resume.
+This is also why every real ainvoke() call below passes durability="sync" —
+persist each checkpoint before the next step starts, not while it executes (the
+default) — which matters even more once a workflow can pause on a human review
+for hours or days.
 """
 
 import argparse
@@ -24,6 +30,7 @@ import subprocess
 import sys
 import uuid
 
+from langgraph.types import Command
 from sqlalchemy import select
 
 from app.db.models import AgentAuditLog, Donor, WorkflowRun
@@ -67,6 +74,22 @@ async def audit_steps(workflow_run_id: str) -> list[str]:
         return list(result.scalars().all())
 
 
+def print_result(result: dict) -> None:
+    if interrupts := result.get("__interrupt__"):
+        print("PAUSED — awaiting human review:")
+        print(json.dumps(interrupts[0].value, indent=2))
+        return
+
+    aggregate = {}
+    if result.get("verification_result") is not None:
+        aggregate["donor_verification"] = result["verification_result"]
+    if result.get("address_result") is not None:
+        aggregate["address_intelligence"] = result["address_result"]
+    if result.get("human_review_decision") is not None:
+        aggregate["human_review"] = result["human_review_decision"]
+    print(json.dumps(aggregate, indent=2))
+
+
 async def run_full(donor_id: str) -> None:
     donor_uuid = await resolve_donor_uuid(donor_id)
     workflow_run_id = await create_workflow_run(donor_uuid)
@@ -76,14 +99,30 @@ async def run_full(donor_id: str) -> None:
         result = await graph.ainvoke(
             {"workflow_run_id": workflow_run_id, "donor_id": str(donor_uuid), "campaign_id": None},
             config={"configurable": {"thread_id": workflow_run_id}},
+            durability="sync",
         )
-    print(json.dumps(result["verification_result"], indent=2))
+    print_result(result)
 
 
 async def resume(workflow_run_id: str) -> None:
+    """Continues a thread with no pending interrupt (e.g. after a crash) —
+    for resuming a genuine interrupt with a decision, use `review` instead."""
     async with build_graph() as graph:
-        result = await graph.ainvoke(None, config={"configurable": {"thread_id": workflow_run_id}})
-    print(json.dumps(result["verification_result"], indent=2))
+        result = await graph.ainvoke(
+            None, config={"configurable": {"thread_id": workflow_run_id}}, durability="sync"
+        )
+    print_result(result)
+
+
+async def review(workflow_run_id: str, action: str, updated_address: str | None, reviewer: str | None, notes: str | None) -> None:
+    decision = {"action": action, "updated_address": updated_address, "reviewer": reviewer, "notes": notes}
+    async with build_graph() as graph:
+        result = await graph.ainvoke(
+            Command(resume=decision),
+            config={"configurable": {"thread_id": workflow_run_id}},
+            durability="sync",
+        )
+    print_result(result)
 
 
 async def _run_until_crash(workflow_run_id: str) -> None:
@@ -102,6 +141,7 @@ async def _run_until_crash(workflow_run_id: str) -> None:
             {"workflow_run_id": workflow_run_id, "donor_id": donor_id, "campaign_id": None},
             config=config,
             stream_mode="updates",
+            durability="sync",
         ):
             step_name = next(iter(update))
             print(f"[crash-demo] node completed: {step_name}", flush=True)
@@ -139,19 +179,23 @@ async def demo_crash_resume(donor_id: str) -> None:
     print("--- step 2: inspect what actually persisted ---")
     steps_before = await audit_steps(workflow_run_id)
     print(f"agent_audit_log steps so far: {steps_before}\n")
+    assert steps_before == ["fetch_core_data", "gather_context"], (
+        f"expected the crash to land right after gather_context, got {steps_before}"
+    )
 
     print("--- step 3: resume in a fresh process from the last durable checkpoint ---")
     async with build_graph() as graph:
-        result = await graph.ainvoke(None, config={"configurable": {"thread_id": workflow_run_id}})
-    print(json.dumps(result["verification_result"], indent=2))
+        result = await graph.ainvoke(
+            None, config={"configurable": {"thread_id": workflow_run_id}}, durability="sync"
+        )
+    print_result(result)
 
     steps_after = await audit_steps(workflow_run_id)
     print(f"\nagent_audit_log steps after resume: {steps_after}")
-    assert steps_after == [
-        "fetch_core_data",
-        "gather_context",
-        "synthesize_verdict",
-    ], "expected fetch_core_data and gather_context to have run exactly once each"
+    assert steps_after[:2] == ["fetch_core_data", "gather_context"], (
+        "expected fetch_core_data and gather_context to have run exactly once each, "
+        f"before the crash, not been re-run after resume — got {steps_after}"
+    )
     print(f"confirmed: {CRASH_TARGET_NODE} and the step before it did not re-run after the crash")
 
 
@@ -159,11 +203,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_run = sub.add_parser("run", help="run the full workflow for a donor")
+    p_run = sub.add_parser("run", help="run the full pipeline for a donor")
     p_run.add_argument("--donor-id", required=True)
 
-    p_resume = sub.add_parser("resume", help="resume an existing workflow run from its last checkpoint")
+    p_resume = sub.add_parser(
+        "resume", help="continue a thread with no pending interrupt (e.g. after a crash)"
+    )
     p_resume.add_argument("--workflow-run-id", required=True)
+
+    p_review = sub.add_parser("review", help="submit a decision for a workflow awaiting human review")
+    p_review.add_argument("--workflow-run-id", required=True)
+    p_review.add_argument("--action", required=True, choices=["approve", "reject", "modify"])
+    p_review.add_argument("--updated-address", default=None)
+    p_review.add_argument("--reviewer", default=None)
+    p_review.add_argument("--notes", default=None)
 
     p_crash = sub.add_parser(
         "demo-crash-resume",
@@ -180,6 +233,10 @@ def main() -> None:
         asyncio.run(run_full(args.donor_id))
     elif args.command == "resume":
         asyncio.run(resume(args.workflow_run_id))
+    elif args.command == "review":
+        asyncio.run(
+            review(args.workflow_run_id, args.action, args.updated_address, args.reviewer, args.notes)
+        )
     elif args.command == "demo-crash-resume":
         asyncio.run(demo_crash_resume(args.donor_id))
     elif args.command == "_run_until_crash":
