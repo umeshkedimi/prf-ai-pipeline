@@ -34,9 +34,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
 
     mcp_crm_url: str = "http://localhost:8100/mcp"
+    mcp_address_url: str = "http://localhost:8101/mcp"
 
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
+    confidence_threshold_address_intelligence: float = 0.80
 
 
 @lru_cache

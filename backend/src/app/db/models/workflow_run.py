@@ -10,7 +10,15 @@ from app.db.base import Base
 
 
 class WorkflowRun(Base):
-    """id doubles as the LangGraph checkpointer `thread_id`."""
+    """id doubles as the LangGraph checkpointer `thread_id`.
+
+    status values: pending | running | awaiting_review | completed | needs_review | failed.
+    `awaiting_review` means the graph is genuinely paused mid-execution on a real
+    LangGraph interrupt() and cannot proceed without a decision via POST
+    .../review (see pending_review). `needs_review` (from Phase 1) is a purely
+    advisory terminal flag — the graph already reached END, nothing is blocked,
+    it just means a low-confidence verification outcome is worth a human glance.
+    """
 
     __tablename__ = "workflow_runs"
 
@@ -25,6 +33,7 @@ class WorkflowRun(Base):
     current_agent: Mapped[str | None] = mapped_column(String(50))
     result: Mapped[dict | None] = mapped_column(JSONB)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    pending_review: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
