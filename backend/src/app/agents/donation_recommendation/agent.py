@@ -18,6 +18,21 @@ AGENT_NAME = "donation_recommendation"
 RETRIEVE_K = 4
 
 
+def build_retrieval_query(segment: str) -> str:
+    """The RAG query this agent asks, as a function of donor segment.
+
+    Extracted so the evaluation suite can reconstruct exactly which chunks the
+    node was given and score its output against that same context — grading
+    groundedness against a different retrieval than the model actually saw would
+    measure nothing.
+    """
+    return (
+        f"Ask strategy, impact statistics, and success stories to motivate a "
+        f"{segment} donor's next gift to our animal-rescue campaign — cost of "
+        f"care and program outcomes that make the ask concrete."
+    )
+
+
 async def compute_rfm(state: PipelineState) -> dict:
     """Deterministic: RFM scoring + ask ladder from the donor's giving history.
     Reuses donation_history already fetched by gather_context; only re-hits the
@@ -57,11 +72,7 @@ async def recommend_ask(state: PipelineState) -> dict:
     profile = state.get("donor_profile") or {}
     segment = rfm.get("segment", "active")
 
-    query = (
-        f"Ask strategy, impact statistics, and success stories to motivate a "
-        f"{segment} donor's next gift to our animal-rescue campaign — cost of "
-        f"care and program outcomes that make the ask concrete."
-    )
+    query = build_retrieval_query(segment)
     chunks = await retrieve(query, k=RETRIEVE_K)
     knowledge = "\n\n".join(
         f"[{c['doc_title']} · {c['doc_type']}]\n{c['chunk_text']}" for c in chunks
