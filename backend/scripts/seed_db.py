@@ -177,6 +177,28 @@ DONORS = [
         "campaign": "Year-End Giving",
         "donations": [(35.00, date(2025, 10, 22))],
     },
+    # Phase 3 addition: eligible with a clean, deliverable address (so it does
+    # NOT hit address review), but a long, high-value giving history that puts
+    # the deterministic ask ladder in the major-gift range — exercising the
+    # recommendation-stage human-review interrupt on its own.
+    {
+        "external_id": "d-0011",
+        "first_name": "Margaret",
+        "last_name": "Ashford",
+        "email": "margaret.ashford@example.com",
+        "address_line1": "78 Chestnut Blvd",
+        "city": "Boston",
+        "state": "MA",
+        "postal_code": "02116",
+        "do_not_contact": False,
+        "notes": "Long-tenured major donor; consistent annual leadership gifts.",
+        "campaign": "Major Gifts Initiative",
+        "donations": [
+            (1000.00, date(2024, 5, 1)),
+            (1500.00, date(2025, 5, 1)),
+            (2000.00, date(2026, 5, 1)),
+        ],
+    },
 ]
 
 

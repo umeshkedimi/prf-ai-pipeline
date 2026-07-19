@@ -62,13 +62,16 @@ async def test_crash_after_gather_context_then_resume_does_not_rerun_completed_n
     assert result["donor_verification"]["eligible"] is True
 
     # the operative claim: fetch_core_data and gather_context ran exactly once
-    # each, before the crash — resume continued on into Address Intelligence
-    # (d-0001 is eligible with a clean address, so it auto-completes with no
-    # interrupt) without re-running either of the pre-crash steps.
+    # each, before the crash — resume continued on through Address Intelligence
+    # and Donation Recommendation (d-0001 is eligible with a clean address and a
+    # modest ask, so it auto-completes with no interrupt) without re-running
+    # either of the pre-crash steps.
     assert await _audit_steps(workflow_run_id) == [
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
         "verify_address",
         "assess_and_normalize",
+        "compute_rfm",
+        "recommend_ask",
     ]

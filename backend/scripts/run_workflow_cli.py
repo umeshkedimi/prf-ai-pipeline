@@ -85,6 +85,8 @@ def print_result(result: dict) -> None:
         aggregate["donor_verification"] = result["verification_result"]
     if result.get("address_result") is not None:
         aggregate["address_intelligence"] = result["address_result"]
+    if result.get("recommendation_result") is not None:
+        aggregate["donation_recommendation"] = result["recommendation_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
     print(json.dumps(aggregate, indent=2))
@@ -114,8 +116,21 @@ async def resume(workflow_run_id: str) -> None:
     print_result(result)
 
 
-async def review(workflow_run_id: str, action: str, updated_address: str | None, reviewer: str | None, notes: str | None) -> None:
-    decision = {"action": action, "updated_address": updated_address, "reviewer": reviewer, "notes": notes}
+async def review(
+    workflow_run_id: str,
+    action: str,
+    updated_address: str | None,
+    updated_ask_amount: float | None,
+    reviewer: str | None,
+    notes: str | None,
+) -> None:
+    decision = {
+        "action": action,
+        "updated_address": updated_address,
+        "updated_ask_amount": updated_ask_amount,
+        "reviewer": reviewer,
+        "notes": notes,
+    }
     async with build_graph() as graph:
         result = await graph.ainvoke(
             Command(resume=decision),
@@ -215,6 +230,12 @@ def main() -> None:
     p_review.add_argument("--workflow-run-id", required=True)
     p_review.add_argument("--action", required=True, choices=["approve", "reject", "modify"])
     p_review.add_argument("--updated-address", default=None)
+    p_review.add_argument(
+        "--updated-ask-amount",
+        type=float,
+        default=None,
+        help="new ask amount, for a recommendation-stage review with --action modify",
+    )
     p_review.add_argument("--reviewer", default=None)
     p_review.add_argument("--notes", default=None)
 
@@ -235,7 +256,14 @@ def main() -> None:
         asyncio.run(resume(args.workflow_run_id))
     elif args.command == "review":
         asyncio.run(
-            review(args.workflow_run_id, args.action, args.updated_address, args.reviewer, args.notes)
+            review(
+                args.workflow_run_id,
+                args.action,
+                args.updated_address,
+                args.updated_ask_amount,
+                args.reviewer,
+                args.notes,
+            )
         )
     elif args.command == "demo-crash-resume":
         asyncio.run(demo_crash_resume(args.donor_id))
