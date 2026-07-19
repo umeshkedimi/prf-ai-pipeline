@@ -33,12 +33,31 @@ class Settings(BaseSettings):
     llm_model: str = "claude-sonnet-5"
     anthropic_api_key: str | None = None
 
+    # Embeddings for the campaign-knowledge RAG store. Anthropic has no
+    # embeddings API, so this defaults to a hosted OpenAI model; resolved
+    # provider-agnostically via LangChain init_embeddings (see rag/embeddings.py).
+    embedding_provider: str = "openai"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+    openai_api_key: str | None = None
+
     mcp_crm_url: str = "http://localhost:8100/mcp"
     mcp_address_url: str = "http://localhost:8101/mcp"
 
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
     confidence_threshold_address_intelligence: float = 0.80
+    # Advisory (non-blocking) bar, deliberately lower than the factual agents'
+    # 0.80: a recommendation's confidence is a prediction about a *future* gift,
+    # not an assessment of an existing fact, so it runs honestly lower. ~0.9+ is
+    # a rich consistent history; ~0.5-0.7 is a thin but usable one (a single
+    # prior gift — entirely normal); below 0.5 means the model has essentially
+    # no anchor (no history, or the anchor gift was excluded as anomalous),
+    # which is what actually warrants a human glance.
+    confidence_threshold_donation_recommendation: float = 0.50
+    # A recommended ask at or above this dollar amount is a major-gift decision
+    # that pauses for human approval, per the spec's human-review trigger list.
+    major_gift_ask_threshold: float = 1000.0
 
 
 @lru_cache
