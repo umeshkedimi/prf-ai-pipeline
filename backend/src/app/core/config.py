@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     llm_model: str = "claude-sonnet-5"
     anthropic_api_key: str | None = None
 
+    # LLM-as-judge model for the evaluation framework. Deliberately a different
+    # (and cheaper) model than the one under evaluation: a model grading its own
+    # output is measurably biased toward it.
+    judge_provider: str = "anthropic"
+    judge_model: str = "claude-haiku-4-5-20251001"
+
     # Embeddings for the campaign-knowledge RAG store. Anthropic has no
     # embeddings API, so this defaults to a hosted OpenAI model; resolved
     # provider-agnostically via LangChain init_embeddings (see rag/embeddings.py).
