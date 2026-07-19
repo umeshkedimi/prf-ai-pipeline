@@ -112,21 +112,43 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         aggregate["donor_verification"] = result["verification_result"]
     if result.get("address_result") is not None:
         aggregate["address_intelligence"] = result["address_result"]
+    if result.get("recommendation_result") is not None:
+        aggregate["donation_recommendation"] = result["recommendation_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
 
-    if result.get("human_review_decision") is not None:
-        # A human already made the call on this workflow — that's authoritative,
-        # no further confidence-threshold gating applies, regardless of the
-        # (honestly preserved) original confidence number in address_result.
-        status = "completed"
-        confidence = result.get("address_result", {}).get("confidence")
-        current_agent = "human_review"
-    elif result.get("address_result") is not None:
-        ar = result["address_result"]
-        confidence = ar["confidence"]
-        status = "completed" if confidence >= settings.confidence_threshold_address_intelligence else "needs_review"
-        current_agent = "address_intelligence"
+    # Status/confidence are driven by the *terminal* stage this run reached, not
+    # by whether any human decision happened along the way — an address-stage
+    # review is no longer terminal now that recommendation runs after it. A
+    # result carries `human_reviewed=True` when a human authoritatively signed
+    # off on that specific stage (no further confidence gating applies to it).
+    rec = result.get("recommendation_result")
+    addr = result.get("address_result")
+    if rec is not None:
+        confidence = rec.get("confidence")
+        if rec.get("human_reviewed"):
+            status = "completed"
+            current_agent = "human_review"
+        else:
+            # The ask cleared the major-gift gate (that's the only blocking
+            # trigger — see route_after_recommendation). Low confidence here is
+            # advisory: flag it for a human's eventual glance without stalling
+            # the run, exactly as Donor Verification's flags behave.
+            status = (
+                "completed"
+                if confidence >= settings.confidence_threshold_donation_recommendation
+                else "needs_review"
+            )
+            current_agent = "donation_recommendation"
+    elif addr is not None:
+        # Address is terminal only when we won't mail (undeliverable/rejected).
+        confidence = addr.get("confidence")
+        if addr.get("human_reviewed"):
+            status = "completed"
+            current_agent = "human_review"
+        else:
+            status = "completed" if confidence >= settings.confidence_threshold_address_intelligence else "needs_review"
+            current_agent = "address_intelligence"
     else:
         vr = result["verification_result"]
         confidence = vr["confidence"]

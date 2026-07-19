@@ -12,8 +12,15 @@ class WorkflowRunCreate(BaseModel):
 
 
 class ReviewDecisionCreate(BaseModel):
+    """API request body for a human review decision. Must stay in sync with
+    agents/human_review/schemas.py:HumanReviewDecision — this model is what
+    actually reaches the graph (the endpoint passes its model_dump() straight
+    into Command(resume=...)), so a field missing here is silently dropped no
+    matter what the agent-side schema declares."""
+
     action: Literal["approve", "reject", "modify"]
-    updated_address: str | None = None
+    updated_address: str | None = None  # address-stage review
+    updated_ask_amount: float | None = None  # recommendation-stage review
     reviewer: str | None = None
     notes: str | None = None
 
