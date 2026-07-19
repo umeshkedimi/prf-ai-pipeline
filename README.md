@@ -52,7 +52,9 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | 5 | Compliance agent + Compliance MCP |
 | 6 | PDF Generation agent + Print Vendor MCP |
 | 7 | Review queue + full Human Review dashboard workflows, multi-agent graph assembly |
-| 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening, evaluation framework |
+| 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening |
+
+**Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
 
 See `docs/` (added as phases land) for architecture diagrams and design notes.
 
@@ -245,3 +247,38 @@ uv run pytest -m integration  # real stack: live LLM + embeddings, both MCP serv
 ```
 
 The integration suite needs the stack running and the knowledge corpus ingested (see Setup). Unit tests need neither — they mock the LLM, the MCP tools, and the RAG retriever, so they run offline with no API keys.
+
+## Evaluation framework
+
+Tests answer *"does the code do what I wrote?"* — deterministic, binary, permanent. They cannot answer *"does the system make good decisions?"* The unit test for the recommendation agent mocks the LLM entirely; it proves retrieved text reaches the prompt and nothing about whether the recommendation is sensible.
+
+Evals close that gap. They are **not pass/fail gates** — they produce scores tracked against a committed baseline, so the question "did that prompt change help?" is a diff rather than a memory exercise.
+
+```bash
+uv run python scripts/run_evals.py                          # default (cheap) suites
+uv run python scripts/run_evals.py --suite retrieval        # one suite
+uv run python scripts/run_evals.py --include-expensive      # add end-to-end trajectory
+uv run python scripts/run_evals.py --runs 5 --set-baseline  # record a new baseline
+```
+
+Every case runs N times (default 3), because `get_llm()` deliberately doesn't pin temperature — a single pass reports noise as signal. Scores are averaged and any case whose score moved between identical runs is flagged as flaky.
+
+| suite | what it measures |
+|---|---|
+| `judge_control` | **whether the LLM judge itself still works** — synthetic cases with known verdicts |
+| `retrieval` | recall@1/@3/@5 and MRR over query→document pairs, scored *apart from generation* |
+| `verification` | eligibility classification + per-class recall + confidence calibration |
+| `recommendation` | ask-selection rule compliance + RAG groundedness |
+| `trajectory` | end-to-end routing: terminal state and node path (expensive, opt-in) |
+
+**Why RAG is scored in two halves.** A wrong answer means either retrieval never surfaced the right chunk, or it did and generation mishandled it. The final output cannot distinguish those, so retrieval is measured independently against known-correct documents.
+
+**Why per-class recall, not just accuracy.** The labeled set is 9 eligible to 2 ineligible. A model that blindly answered "eligible" scores 82% accuracy while failing *both* cases that carry legal consequences. `recall_ineligible` is therefore promoted to a headline metric — it must be 1.000.
+
+**Why calibration.** The pipeline *routes* on confidence thresholds, so whether a stated 0.9 means 90% correctness is load-bearing, not academic. The suite buckets predictions by stated confidence and compares each bucket's mean confidence to its observed accuracy, reporting expected calibration error. This is what turns threshold-setting from intuition into measurement.
+
+**Why a separate judge model.** Groundedness scoring runs on Claude Haiku rather than the Sonnet model that generated the text — a model grading its own output is measurably biased toward approving it. `judge_control` then guards the guard: synthetic cases with known-correct verdicts (a fabricated statistic *must* be caught, a restatement of the donor's own computed data *must not* be flagged) run on every sweep, so a groundedness score of 1.000 is meaningful rather than merely lenient.
+
+**Why `--set-baseline` can refuse.** A run that hits errors — an exhausted API balance, a dead MCP server — scores those cases 0.0 because they never executed. Recording that as the baseline bakes a fake regression into every future comparison, so promotion is blocked unless the run was clean.
+
+Results are written to `backend/evals/results/latest.json`, compared against the committed `baseline.json`, and persisted to an `eval_runs` table with the git SHA that produced them — a score is only meaningful if you can attribute it to code.

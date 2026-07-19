@@ -35,3 +35,7 @@ build/
 # Generated PDFs / object storage local mount
 storage/
 *.pdf
+
+# Per-run eval output. baseline.json IS committed — it's the reference point
+# metric movement is measured against.
+backend/evals/results/latest.json
