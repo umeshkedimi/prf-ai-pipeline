@@ -37,6 +37,14 @@ dev = [
     "ruff>=0.7",
 ]
 
+[tool.ruff]
+# Roughly the width this codebase was already written at. Without it ruff
+# formats at its 88-char default, which rewrites half the repo and buries real
+# changes in whitespace noise. Note this does not make `ruff format` a no-op:
+# the code was hand-wrapped, so adopting the formatter needs a one-time sweep
+# in its own commit. Until then, use `ruff check` and skip `ruff format`.
+line-length = 100
+
 [tool.uv]
 package = true
 
