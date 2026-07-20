@@ -35,11 +35,18 @@ class FakeTool:
 
 
 class FakeStructuredLLM:
+    """Mirrors include_raw=True: the parsed object alongside the AIMessage that
+    carries usage_metadata, which is what token accounting reads."""
+
     def __init__(self, result: VerificationResult):
         self._result = result
 
     async def ainvoke(self, messages):
-        return self._result
+        raw = AIMessage(
+            content="",
+            usage_metadata={"input_tokens": 120, "output_tokens": 45, "total_tokens": 165},
+        )
+        return {"raw": raw, "parsed": self._result, "parsing_error": None}
 
 
 class FakeToolCallingLLM:
@@ -58,7 +65,7 @@ class FakeLLM:
     def bind_tools(self, tools):
         return FakeToolCallingLLM(self._tool_responses)
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, include_raw=False):
         return FakeStructuredLLM(self._structured_result)
 
 

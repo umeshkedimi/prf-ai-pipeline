@@ -6,7 +6,7 @@ from app.agents.address_intelligence.prompts import ASSESS_AND_NORMALIZE_SYSTEM_
 from app.agents.address_intelligence.schemas import AddressResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
-from app.core.llm import get_llm
+from app.core.llm import ainvoke_structured, get_llm
 from app.graph.state import PipelineState
 from app.mcp_clients.address_client import get_address_tools, parse_single
 
@@ -81,14 +81,14 @@ async def assess_and_normalize(state: PipelineState) -> dict:
         forwarding = parse_single(result)
         tool_calls = [{"tool_name": "lookup_new_address", "args": args, "result": forwarding}]
 
-    llm = get_llm().with_structured_output(AddressResult)
+    llm = get_llm()
     prompt = f"Raw address verification:\n{raw}\n\nForwarding lookup (only relevant if moved=true):\n{forwarding}\n"
     messages = [
         SystemMessage(content=ASSESS_AND_NORMALIZE_SYSTEM_PROMPT),
         HumanMessage(content=prompt),
     ]
 
-    result: AddressResult = await llm.ainvoke(messages)
+    result, usage = await ainvoke_structured(llm, AddressResult, messages)
     address_result = result.model_dump()
 
     await write_audit_log(
@@ -102,5 +102,6 @@ async def assess_and_normalize(state: PipelineState) -> dict:
         tool_calls=tool_calls,
         model=settings.llm_model,
         latency_ms=int((time.monotonic() - started) * 1000),
+        **usage,
     )
     return {"address_result": address_result}

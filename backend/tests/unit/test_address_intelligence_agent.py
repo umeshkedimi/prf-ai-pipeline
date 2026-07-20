@@ -4,6 +4,7 @@ mocks the LLM and Address MCP tools entirely, so no network/API calls are made."
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.agents.address_intelligence import agent as agent_module
 from app.agents.address_intelligence.schemas import AddressResult
@@ -32,18 +33,25 @@ class FakeTool:
 
 
 class FakeStructuredLLM:
+    """Mirrors include_raw=True: the parsed object alongside the AIMessage that
+    carries usage_metadata, which is what token accounting reads."""
+
     def __init__(self, result: AddressResult):
         self._result = result
 
     async def ainvoke(self, messages):
-        return self._result
+        raw = AIMessage(
+            content="",
+            usage_metadata={"input_tokens": 90, "output_tokens": 30, "total_tokens": 120},
+        )
+        return {"raw": raw, "parsed": self._result, "parsing_error": None}
 
 
 class FakeLLM:
     def __init__(self, structured_result: AddressResult):
         self._structured_result = structured_result
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, include_raw=False):
         return FakeStructuredLLM(self._structured_result)
 
 

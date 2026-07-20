@@ -17,6 +17,8 @@ async def write_audit_log(
     tool_calls: list | None = None,
     model: str | None = None,
     latency_ms: int | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> None:
     async with db_session() as session:
         session.add(
@@ -32,6 +34,8 @@ async def write_audit_log(
                 tool_calls=tool_calls,
                 model=model,
                 latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
         )
         await session.commit()

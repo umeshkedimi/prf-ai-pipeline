@@ -9,7 +9,7 @@ from app.agents.donation_recommendation.rfm import compute_rfm as compute_rfm_sc
 from app.agents.donation_recommendation.schemas import RecommendationResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
-from app.core.llm import get_llm
+from app.core.llm import ainvoke_structured, get_llm
 from app.graph.state import PipelineState
 from app.mcp_clients.crm_client import get_crm_tools, parse_list
 from app.rag.retriever import retrieve
@@ -78,7 +78,7 @@ async def recommend_ask(state: PipelineState) -> dict:
         f"[{c['doc_title']} · {c['doc_type']}]\n{c['chunk_text']}" for c in chunks
     )
 
-    llm = get_llm().with_structured_output(RecommendationResult)
+    llm = get_llm()
     prompt = (
         f"Donor first name: {profile.get('first_name', '')}\n\n"
         f"Deterministic RFM summary and ask ladder (copy these fields through unchanged, "
@@ -90,7 +90,7 @@ async def recommend_ask(state: PipelineState) -> dict:
         HumanMessage(content=prompt),
     ]
 
-    result: RecommendationResult = await llm.ainvoke(messages)
+    result, usage = await ainvoke_structured(llm, RecommendationResult, messages)
     recommendation = result.model_dump()
 
     await write_audit_log(
@@ -109,5 +109,6 @@ async def recommend_ask(state: PipelineState) -> dict:
                      "result": [c["doc_title"] for c in chunks]}],
         model=settings.llm_model,
         latency_ms=int((time.monotonic() - started) * 1000),
+        **usage,
     )
     return {"recommendation_result": recommendation}

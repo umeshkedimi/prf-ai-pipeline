@@ -1,5 +1,8 @@
+from typing import Any
+
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 
 from app.core.config import get_settings
 
@@ -33,6 +36,38 @@ def get_llm(
         model_provider=resolved_provider,
         **model_kwargs,
     )
+
+
+def token_usage(*messages: BaseMessage | None) -> dict[str, int]:
+    """Total tokens across one or more responses.
+
+    Takes several messages because a tool-calling loop makes several LLM calls
+    for one logical step — the cost of that step is their sum, and reporting
+    only the last call would understate it by most of its value.
+    """
+    totals = {"input_tokens": 0, "output_tokens": 0}
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None) or {}
+        totals["input_tokens"] += usage.get("input_tokens") or 0
+        totals["output_tokens"] += usage.get("output_tokens") or 0
+    return totals
+
+
+async def ainvoke_structured(llm: BaseChatModel, schema: Any, messages: list) -> tuple[Any, dict]:
+    """Structured-output call that also returns its token usage.
+
+    `with_structured_output` normally hands back only the parsed object and
+    drops the AIMessage carrying usage_metadata, which is exactly the data
+    needed to attribute spend to a node. `include_raw=True` keeps both.
+
+    include_raw also suppresses parse failures into a `parsing_error` key
+    instead of raising, so re-raise to preserve the original behaviour — a
+    node that silently returns None here would be worse than one that fails.
+    """
+    result = await llm.with_structured_output(schema, include_raw=True).ainvoke(messages)
+    if result.get("parsing_error"):
+        raise ValueError(f"structured output failed to parse: {result['parsing_error']}")
+    return result["parsed"], token_usage(result.get("raw"))
 
 
 def get_judge_llm(**kwargs) -> BaseChatModel:

@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.agents.donation_recommendation import agent as agent_module
 from app.agents.donation_recommendation.schemas import RecommendationResult
@@ -32,20 +33,27 @@ class FakeTool:
 
 
 class FakeStructuredLLM:
+    """Mirrors include_raw=True: the parsed object alongside the AIMessage that
+    carries usage_metadata, which is what token accounting reads."""
+
     def __init__(self, result):
         self._result = result
         self.messages = None
 
     async def ainvoke(self, messages):
         self.messages = messages
-        return self._result
+        raw = AIMessage(
+            content="",
+            usage_metadata={"input_tokens": 800, "output_tokens": 150, "total_tokens": 950},
+        )
+        return {"raw": raw, "parsed": self._result, "parsing_error": None}
 
 
 class FakeLLM:
     def __init__(self, structured_result):
         self.structured = FakeStructuredLLM(structured_result)
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, include_raw=False):
         return self.structured
 
 

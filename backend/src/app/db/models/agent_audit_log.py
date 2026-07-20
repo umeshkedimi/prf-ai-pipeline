@@ -34,4 +34,8 @@ class AgentAuditLog(Base):
     tool_calls: Mapped[list | None] = mapped_column(JSONB)
     model: Mapped[str | None] = mapped_column(String(100))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
+    # Token counts make "where did the spend go" a SQL question against this
+    # table rather than an estimate read off the prompts.
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

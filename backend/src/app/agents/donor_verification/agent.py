@@ -9,7 +9,7 @@ from app.agents.donor_verification.prompts import (
 from app.agents.donor_verification.schemas import VerificationResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
-from app.core.llm import get_llm
+from app.core.llm import ainvoke_structured, get_llm, token_usage
 from app.graph.state import PipelineState
 from app.mcp_clients.crm_client import get_crm_tools, parse_list, parse_single
 
@@ -65,9 +65,14 @@ async def gather_context(state: PipelineState) -> dict:
     donation_history: list[dict] = []
     duplicate_candidates: list[dict] = []
     tool_call_log: list[dict] = []
+    # This loop is the most expensive step in the pipeline: each iteration is a
+    # full LLM call over a message list that grows every time. Accumulate so the
+    # audit row reflects the whole step, not just its final call.
+    responses = []
 
     for _ in range(MAX_TOOL_ITERATIONS):
         response = await llm.ainvoke(messages)
+        responses.append(response)
         messages.append(response)
         if not response.tool_calls:
             break
@@ -92,6 +97,7 @@ async def gather_context(state: PipelineState) -> dict:
         tool_calls=tool_call_log,
         model=settings.llm_model,
         latency_ms=int((time.monotonic() - started) * 1000),
+        **token_usage(*responses),
     )
     return {"donation_history": donation_history, "duplicate_candidates": duplicate_candidates}
 
@@ -100,7 +106,7 @@ async def synthesize_verdict(state: PipelineState) -> dict:
     """Structured-output LLM call, no tools — produces the final VerificationResult."""
     started = time.monotonic()
     settings = get_settings()
-    llm = get_llm().with_structured_output(VerificationResult)
+    llm = get_llm()
 
     input_snapshot = {
         "donor_profile": state.get("donor_profile"),
@@ -117,7 +123,7 @@ async def synthesize_verdict(state: PipelineState) -> dict:
         HumanMessage(content=prompt),
     ]
 
-    result: VerificationResult = await llm.ainvoke(messages)
+    result, usage = await ainvoke_structured(llm, VerificationResult, messages)
     verdict = result.model_dump()
 
     await write_audit_log(
@@ -130,5 +136,6 @@ async def synthesize_verdict(state: PipelineState) -> dict:
         reasoning="; ".join(verdict["reasoning"]),
         model=settings.llm_model,
         latency_ms=int((time.monotonic() - started) * 1000),
+        **usage,
     )
     return {"verification_result": verdict}
