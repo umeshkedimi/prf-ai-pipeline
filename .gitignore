@@ -27,6 +27,9 @@ build/
 # Docker
 *.log
 
+# Agent working agreement — local guidance, not part of the shipped project
+CLAUDE.local.md
+
 # OS / editor
 .DS_Store
 .idea/
