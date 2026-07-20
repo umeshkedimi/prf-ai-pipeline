@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.evals.store import current_git_sha
+from app.evals.store import current_git_sha, current_models
 from app.evals.types import SuiteReport
 
 RESULTS_DIR = Path(__file__).resolve().parents[3] / "evals" / "results"
@@ -25,6 +25,7 @@ def build_payload(reports: list[SuiteReport]) -> dict[str, Any]:
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "git_sha": current_git_sha(),
+        **current_models(),
         "suites": {report.suite: report.to_dict() for report in reports},
     }
 
@@ -44,6 +45,7 @@ def promote_to_baseline(reports: list[SuiteReport]) -> Path:
     baseline["suites"].update({r.suite: r.to_dict() for r in reports})
     baseline["generated_at"] = datetime.now(UTC).isoformat()
     baseline["git_sha"] = current_git_sha()
+    baseline.update(current_models())
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     return BASELINE_PATH
 
@@ -108,8 +110,30 @@ def _render_detail(detail: dict[str, Any], indent: str) -> list[str]:
     return lines
 
 
+def _model_drift_warning(baseline: dict | None) -> list[str]:
+    """A delta against a baseline produced by a different model is a comparison
+    of two models, not of two commits. Say so rather than letting the arrows
+    imply a regression."""
+    if not baseline:
+        return []
+    current = current_models()
+    drifted = [
+        f"{key.replace('_', ' ')}: {baseline.get(key) or 'unrecorded'} → {value}"
+        for key, value in current.items()
+        if baseline.get(key) != value
+    ]
+    if not drifted:
+        return []
+    return [
+        "",
+        "  ⚠ baseline was produced by a different model — deltas below compare",
+        "    models, not code:",
+        *(f"      {line}" for line in drifted),
+    ]
+
+
 def render_console(reports: list[SuiteReport], baseline: dict | None = None) -> str:
-    lines: list[str] = []
+    lines: list[str] = _model_drift_warning(baseline)
     width = 74
 
     for report in reports:

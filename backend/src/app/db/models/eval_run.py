@@ -12,7 +12,9 @@ class EvalRun(Base):
     """One execution of one eval suite. Kept as history so metric movement is
     queryable over time — "did that prompt change improve groundedness?" is a
     SQL question, not a guess. `git_sha` ties a score to the code that produced
-    it, which is the only way a trend line means anything."""
+    it, and `llm_model`/`judge_model` to the models that produced it — a
+    provider swap moves every metric at once, and without those columns the
+    trend line reads it as a code regression."""
 
     __tablename__ = "eval_runs"
 
@@ -21,6 +23,8 @@ class EvalRun(Base):
     )
     suite: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     git_sha: Mapped[str | None] = mapped_column(String(40))
+    llm_model: Mapped[str | None] = mapped_column(String(100))
+    judge_model: Mapped[str | None] = mapped_column(String(100))
     runs_per_case: Mapped[int] = mapped_column(Integer, nullable=False)
     case_count: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_s: Mapped[float] = mapped_column(Float, nullable=False)

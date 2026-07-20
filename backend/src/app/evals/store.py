@@ -2,6 +2,7 @@
 
 import subprocess
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.models import EvalRun
 from app.db.session import db_session
@@ -22,12 +23,23 @@ def current_git_sha() -> str | None:
         return None
 
 
+def current_models() -> dict[str, str]:
+    """The models a score was produced by. Without this, swapping provider or
+    model reads as a code regression in the delta column — every metric moves
+    at once and `git_sha` alone gives no way to tell why."""
+    settings = get_settings()
+    return {"llm_model": settings.llm_model, "judge_model": settings.judge_model}
+
+
 async def persist(report: SuiteReport) -> None:
+    models = current_models()
     async with db_session() as session:
         session.add(
             EvalRun(
                 suite=report.suite,
                 git_sha=current_git_sha(),
+                llm_model=models["llm_model"],
+                judge_model=models["judge_model"],
                 runs_per_case=report.runs_per_case,
                 case_count=report.case_count,
                 duration_s=report.duration_s,
