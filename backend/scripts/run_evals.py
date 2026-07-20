@@ -7,8 +7,10 @@ you compare against the committed baseline and decide.
 Usage:
   uv run python scripts/run_evals.py                          # default (cheap) suites
   uv run python scripts/run_evals.py --suite retrieval        # one suite
+  uv run python scripts/run_evals.py --case adoption-story    # one case
   uv run python scripts/run_evals.py --include-expensive      # add trajectory
   uv run python scripts/run_evals.py --runs 5 --set-baseline  # record a new baseline
+  uv run python scripts/run_evals.py --llm-model <cheap-id>   # sweep on a cheap model
 
 Requires the stack up (postgres, mcp-crm, mcp-address), the DB seeded, and the
 knowledge corpus ingested.
@@ -17,12 +19,13 @@ knowledge corpus ingested.
 import argparse
 import asyncio
 
+from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.base import reset_engine
 from app.evals.report import load_baseline, promote_to_baseline, render_console, write_latest
 from app.evals.runner import run_suite
 from app.evals.store import persist
-from app.evals.suites import ALL_SUITES, resolve
+from app.evals.suites import ALL_SUITES, resolve, select_cases
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,10 +37,22 @@ def parse_args() -> argparse.Namespace:
         help=f"suite to run (repeatable). available: {', '.join(ALL_SUITES)}",
     )
     parser.add_argument(
+        "--case",
+        action="append",
+        dest="cases",
+        help="case id to run (repeatable). without this the whole suite runs.",
+    )
+    parser.add_argument(
         "--runs",
         type=int,
-        default=3,
-        help="repeats per case (default 3). >1 is what surfaces model non-determinism.",
+        default=None,
+        help="repeats per case (default 3, or the suite's own default). "
+        ">1 is what surfaces model non-determinism.",
+    )
+    parser.add_argument(
+        "--llm-model",
+        help="override LLM_MODEL for this run, so a sweep can iterate on a cheap "
+        "model and validate on the real one. Recorded in the results.",
     )
     parser.add_argument(
         "--include-expensive",
@@ -61,14 +76,27 @@ def parse_args() -> argparse.Namespace:
 async def main() -> None:
     configure_logging()
     args = parse_args()
-    suites = resolve(args.suites, args.include_expensive)
+    suites = select_cases(resolve(args.suites, args.include_expensive), args.cases)
+
+    if args.cases and args.set_baseline:
+        # promote_to_baseline replaces a suite's entry wholesale, so baselining
+        # a filtered run would silently erase every case that didn't run.
+        raise SystemExit("--case cannot be combined with --set-baseline: a filtered run would\n"
+                         "replace the suite's baseline with only the cases you selected.")
+
+    if args.llm_model:
+        # get_settings is lru_cached, so mutating the cached instance is what
+        # every downstream get_llm() call and the recorded result both read.
+        get_settings().llm_model = args.llm_model
+        print(f"overriding llm model for this run: {args.llm_model}")
 
     await reset_engine()
     try:
         reports = []
         for suite in suites:
-            print(f"running {suite.name} ({len(suite.cases)} cases × {args.runs} runs)...")
-            report = await run_suite(suite, runs_per_case=args.runs)
+            runs = args.runs if args.runs is not None else (suite.default_runs or 3)
+            print(f"running {suite.name} ({len(suite.cases)} cases × {runs} runs)...")
+            report = await run_suite(suite, runs_per_case=runs)
             reports.append(report)
             if not args.no_db:
                 await persist(report)

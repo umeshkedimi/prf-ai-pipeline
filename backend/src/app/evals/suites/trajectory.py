@@ -121,4 +121,9 @@ SUITE = EvalSuite(
         FunctionScorer("reached_recommendation", _reached_recommendation_when_expected),
     ],
     expensive=True,
+    # The most expensive suite in the set, and the one with least to gain from
+    # repeats: routing was deliberately keyed off deterministic values
+    # (route_after_recommendation reads the ask amount, not a model-produced
+    # confidence), so running it 3x re-verifies a path that barely varies.
+    default_runs=1,
 )

@@ -1,6 +1,8 @@
 """Suite registry. Adding an eval for a new agent means adding one module here
 and registering it — the runner, scorers, reporting, and persistence are shared."""
 
+from dataclasses import replace
+
 from app.evals.suites import judge_control, recommendation, retrieval, trajectory, verification
 from app.evals.types import EvalSuite
 
@@ -35,3 +37,22 @@ def resolve(names: list[str] | None, include_expensive: bool) -> list[EvalSuite]
     if include_expensive:
         selected = list(ALL_SUITES)
     return [ALL_SUITES[n] for n in selected]
+
+
+def select_cases(suites: list[EvalSuite], case_ids: list[str] | None) -> list[EvalSuite]:
+    """Narrow suites to specific cases, so debugging one scorer costs one case
+    rather than a whole suite. Suites with no matching case drop out entirely."""
+    if not case_ids:
+        return suites
+
+    wanted = set(case_ids)
+    narrowed = [
+        replace(suite, cases=[c for c in suite.cases if c.case_id in wanted])
+        for suite in suites
+        if any(c.case_id in wanted for c in suite.cases)
+    ]
+    # A typo'd case id would otherwise run nothing and report a clean sweep.
+    found = {c.case_id for suite in narrowed for c in suite.cases}
+    if missing := wanted - found:
+        raise SystemExit(f"unknown case id(s): {', '.join(sorted(missing))}")
+    return narrowed

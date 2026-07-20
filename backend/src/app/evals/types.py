@@ -84,6 +84,10 @@ class EvalSuite:
     # Expensive suites (full-pipeline runs) are opt-in so the default sweep
     # stays cheap enough to run often.
     expensive: bool = False
+    # Per-suite repeat count, used when --runs isn't given explicitly. Repeats
+    # exist to surface model non-determinism, which is only worth paying for
+    # where the suite's outcome can actually vary.
+    default_runs: int | None = None
 
 
 @dataclass
