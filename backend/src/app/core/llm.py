@@ -25,6 +25,9 @@ def get_llm(
     model_kwargs = dict(kwargs)
     if resolved_provider == "anthropic" and settings.anthropic_api_key:
         model_kwargs.setdefault("api_key", settings.anthropic_api_key)
+    elif resolved_provider == "google_genai" and settings.google_api_key:
+        # langchain-google-genai names this kwarg google_api_key, not api_key.
+        model_kwargs.setdefault("google_api_key", settings.google_api_key)
     return init_chat_model(
         model=model or settings.llm_model,
         model_provider=resolved_provider,

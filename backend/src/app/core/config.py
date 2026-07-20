@@ -29,15 +29,16 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
-    llm_provider: str = "anthropic"
-    llm_model: str = "claude-sonnet-5"
+    llm_provider: str = "google_genai"
+    llm_model: str = "gemini-2.5-flash"
     anthropic_api_key: str | None = None
+    google_api_key: str | None = None
 
     # LLM-as-judge model for the evaluation framework. Deliberately a different
     # (and cheaper) model than the one under evaluation: a model grading its own
     # output is measurably biased toward it.
-    judge_provider: str = "anthropic"
-    judge_model: str = "claude-haiku-4-5-20251001"
+    judge_provider: str = "google_genai"
+    judge_model: str = "gemini-2.5-flash-lite"
 
     # Embeddings for the campaign-knowledge RAG store. Anthropic has no
     # embeddings API, so this defaults to a hosted OpenAI model; resolved
