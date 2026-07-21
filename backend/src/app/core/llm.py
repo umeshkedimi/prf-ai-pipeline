@@ -31,6 +31,14 @@ def get_llm(
     elif resolved_provider == "google_genai" and settings.google_api_key:
         # langchain-google-genai names this kwarg google_api_key, not api_key.
         model_kwargs.setdefault("google_api_key", settings.google_api_key)
+    elif resolved_provider == "ollama":
+        # Hosted providers cap generation length server-side; Ollama does not
+        # unless told to. Observed directly during an eval sweep: qwen2.5:14b
+        # hit a degenerate repetition loop on one call and generated past
+        # 32,000 tokens with no stop token, hanging indefinitely. 2048 is well
+        # above anything this pipeline's structured outputs need, so it only
+        # bites a genuinely runaway generation.
+        model_kwargs.setdefault("num_predict", 2048)
     return init_chat_model(
         model=model or settings.llm_model,
         model_provider=resolved_provider,
