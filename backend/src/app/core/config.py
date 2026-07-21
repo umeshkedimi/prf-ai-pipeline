@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # no anchor (no history, or the anchor gift was excluded as anomalous),
     # which is what actually warrants a human glance.
     confidence_threshold_donation_recommendation: float = 0.50
+    # Advisory (non-blocking) bar for the letter draft, same reasoning as the
+    # recommendation threshold above: drafting is judgment, not a factual
+    # assessment. Set slightly higher than recommendation's 0.50 because the
+    # draft is graded on groundedness in retrieved knowledge, which is a more
+    # concrete thing to be confident or unconfident about than a future gift.
+    confidence_threshold_campaign_personalization: float = 0.60
     # A recommended ask at or above this dollar amount is a major-gift decision
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0

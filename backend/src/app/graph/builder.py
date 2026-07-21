@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.address_intelligence.agent import assess_and_normalize, verify_address
+from app.agents.campaign_personalization.agent import personalize_letter
 from app.agents.donation_recommendation.agent import compute_rfm, recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
 from app.agents.human_review.agent import human_review
@@ -40,9 +41,12 @@ def route_after_human_review(state: PipelineState) -> str:
     """After a human decision, resume where it makes sense. An address-stage
     decision (recommendation not computed yet) continues into the recommendation
     if the address is now deliverable, else stops (rejected/undeliverable → can't
-    mail). A recommendation-stage decision is the last step for now."""
+    mail). A recommendation-stage decision continues into personalization if the
+    (possibly human-adjusted) ask is still positive; a rejected ask is zeroed out
+    by human_review, and there's nothing to personalize for a $0 letter."""
     if state.get("recommendation_result") is not None:
-        return END  # recommendation stage — nothing further until Phase 4
+        rec = state.get("recommendation_result") or {}
+        return "personalize_letter" if rec.get("recommended_ask", 0) > 0 else END
     address_result = state.get("address_result") or {}
     return "compute_rfm" if address_result.get("deliverable") else END
 
@@ -65,7 +69,7 @@ def route_after_recommendation(state: PipelineState) -> str:
     rec = state.get("recommendation_result") or {}
     if rec.get("recommended_ask", 0) >= settings.major_gift_ask_threshold:
         return "human_review"
-    return END
+    return "personalize_letter"
 
 
 def _build_graph() -> StateGraph:
@@ -78,6 +82,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("compute_rfm", compute_rfm)
     graph.add_node("recommend_ask", recommend_ask)
     graph.add_node("human_review", human_review)
+    graph.add_node("personalize_letter", personalize_letter)
 
     graph.add_edge(START, "fetch_core_data")
     graph.add_edge("fetch_core_data", "gather_context")
@@ -93,11 +98,20 @@ def _build_graph() -> StateGraph:
     )
     graph.add_edge("compute_rfm", "recommend_ask")
     graph.add_conditional_edges(
-        "recommend_ask", route_after_recommendation, {"human_review": "human_review", END: END}
+        "recommend_ask",
+        route_after_recommendation,
+        {"human_review": "human_review", "personalize_letter": "personalize_letter"},
     )
     graph.add_conditional_edges(
-        "human_review", route_after_human_review, {"compute_rfm": "compute_rfm", END: END}
+        "human_review",
+        route_after_human_review,
+        {
+            "compute_rfm": "compute_rfm",
+            "personalize_letter": "personalize_letter",
+            END: END,
+        },
     )
+    graph.add_edge("personalize_letter", END)
     return graph
 
 

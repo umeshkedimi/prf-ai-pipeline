@@ -24,18 +24,22 @@ from app.graph.builder import build_graph
 VERIFICATION_ONLY = ["fetch_core_data", "gather_context", "synthesize_verdict"]
 THROUGH_ADDRESS = [*VERIFICATION_ONLY, "verify_address", "assess_and_normalize"]
 FULL_PIPELINE = [*THROUGH_ADDRESS, "compute_rfm", "recommend_ask"]
+# A major-gift ask pauses at human_review before personalize_letter ever runs
+# (see route_after_recommendation) — FULL_PIPELINE is that donor's real path.
+# Everyone below the threshold continues one step further.
+PERSONALIZED_PIPELINE = [*FULL_PIPELINE, "personalize_letter"]
 
 # (external_id, terminal state, expected node path, scenario)
 # terminal state is one of: "end" (reached END) or "paused:<stage>".
 _LABELS: list[tuple[str, str, list[str], str]] = [
-    ("d-0001", "end", FULL_PIPELINE, "clean donor runs the full pipeline"),
-    ("d-0002", "end", FULL_PIPELINE, "duplicate flag is advisory, must not block"),
-    ("d-0003", "end", FULL_PIPELINE, "duplicate flag is advisory, must not block"),
+    ("d-0001", "end", PERSONALIZED_PIPELINE, "clean donor runs the full pipeline"),
+    ("d-0002", "end", PERSONALIZED_PIPELINE, "duplicate flag is advisory, must not block"),
+    ("d-0003", "end", PERSONALIZED_PIPELINE, "duplicate flag is advisory, must not block"),
     ("d-0004", "end", VERIFICATION_ONLY, "do-not-contact stops before address work"),
     ("d-0005", "end", VERIFICATION_ONLY, "suppressed donor stops before address work"),
-    ("d-0006", "end", FULL_PIPELINE, "suspicious flag advisory; outlier keeps ask modest"),
+    ("d-0006", "end", PERSONALIZED_PIPELINE, "suspicious flag advisory; outlier keeps ask modest"),
     ("d-0007", "paused:address", THROUGH_ADDRESS, "no address on file pauses for review"),
-    ("d-0008", "end", FULL_PIPELINE, "clean recurring donor"),
+    ("d-0008", "end", PERSONALIZED_PIPELINE, "clean recurring donor"),
     ("d-0009", "paused:address", THROUGH_ADDRESS, "moved, uncertain forwarding address"),
     ("d-0010", "paused:address", THROUGH_ADDRESS, "vacant address, no forwarding found"),
     (

@@ -120,10 +120,23 @@ def test_address_review_stops_when_address_is_rejected():
     assert builder_module.route_after_human_review(state) == "__end__"
 
 
-def test_recommendation_review_is_terminal():
+def test_approved_recommendation_review_continues_to_personalization():
     state = {
         "address_result": {"deliverable": True},
-        "recommendation_result": {"recommended_ask": 500.0, "human_reviewed": True},
+        "recommendation_result": {
+            "recommended_ask": 500.0,
+            "human_reviewed": True,
+        },
+    }
+    assert builder_module.route_after_human_review(state) == "personalize_letter"
+
+
+def test_rejected_recommendation_review_is_terminal():
+    """A rejected recommendation is zeroed out by human_review — nothing to
+    personalize for a $0 letter."""
+    state = {
+        "address_result": {"deliverable": True},
+        "recommendation_result": {"recommended_ask": 0.0, "human_reviewed": True},
     }
     assert builder_module.route_after_human_review(state) == "__end__"
 
@@ -137,7 +150,7 @@ def test_low_confidence_alone_does_not_block_the_pipeline():
     """Confidence is a non-deterministic prediction about a future gift, so it
     must not decide a blocking pause — it only marks the run needs_review."""
     state = {"recommendation_result": {"recommended_ask": 100.0, "confidence": 0.4}}
-    assert builder_module.route_after_recommendation(state) == "__end__"
+    assert builder_module.route_after_recommendation(state) == "personalize_letter"
 
 
 def test_major_gift_ask_pauses_even_at_high_confidence():
@@ -145,9 +158,9 @@ def test_major_gift_ask_pauses_even_at_high_confidence():
     assert builder_module.route_after_recommendation(state) == "human_review"
 
 
-def test_modest_confident_recommendation_completes():
+def test_modest_confident_recommendation_continues_to_personalization():
     state = {"recommendation_result": {"recommended_ask": 225.0, "confidence": 0.92}}
-    assert builder_module.route_after_recommendation(state) == "__end__"
+    assert builder_module.route_after_recommendation(state) == "personalize_letter"
 
 
 def test_confident_deliverable_address_flows_into_recommendation():

@@ -114,6 +114,8 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         aggregate["address_intelligence"] = result["address_result"]
     if result.get("recommendation_result") is not None:
         aggregate["donation_recommendation"] = result["recommendation_result"]
+    if result.get("personalization_result") is not None:
+        aggregate["campaign_personalization"] = result["personalization_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
 
@@ -122,9 +124,20 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
     # review is no longer terminal now that recommendation runs after it. A
     # result carries `human_reviewed=True` when a human authoritatively signed
     # off on that specific stage (no further confidence gating applies to it).
+    pers = result.get("personalization_result")
     rec = result.get("recommendation_result")
     addr = result.get("address_result")
-    if rec is not None:
+    if pers is not None:
+        # personalize_letter has no interrupt of its own — low confidence here
+        # is advisory only, exactly like the stages below.
+        confidence = pers.get("confidence")
+        status = (
+            "completed"
+            if confidence >= settings.confidence_threshold_campaign_personalization
+            else "needs_review"
+        )
+        current_agent = "campaign_personalization"
+    elif rec is not None:
         confidence = rec.get("confidence")
         if rec.get("human_reviewed"):
             status = "completed"

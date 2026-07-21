@@ -3,7 +3,14 @@ and registering it — the runner, scorers, reporting, and persistence are share
 
 from dataclasses import replace
 
-from app.evals.suites import judge_control, recommendation, retrieval, trajectory, verification
+from app.evals.suites import (
+    campaign_personalization,
+    judge_control,
+    recommendation,
+    retrieval,
+    trajectory,
+    verification,
+)
 from app.evals.types import EvalSuite
 
 ALL_SUITES: dict[str, EvalSuite] = {
@@ -15,6 +22,7 @@ ALL_SUITES: dict[str, EvalSuite] = {
         retrieval.SUITE,
         verification.SUITE,
         recommendation.SUITE,
+        campaign_personalization.SUITE,
         trajectory.SUITE,
     )
 }

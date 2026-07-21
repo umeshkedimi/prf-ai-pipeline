@@ -3,7 +3,7 @@ from typing import Any, TypedDict
 
 class PipelineState(TypedDict, total=False):
     """Shared state threaded through the full 7-agent graph. Keys for phases
-    3-6 are stubbed here (unpopulated) so those phases extend this type
+    5-6 are stubbed here (unpopulated) so those phases extend this type
     instead of reshaping it."""
 
     # --- shared workflow context ---
