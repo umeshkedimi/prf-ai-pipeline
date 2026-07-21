@@ -1,3 +1,4 @@
+import json
 import time
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -15,6 +16,12 @@ from app.mcp_clients.crm_client import get_crm_tools, parse_list, parse_single
 
 MAX_TOOL_ITERATIONS = 4
 AGENT_NAME = "donor_verification"
+# The CRM MCP tool occasionally returns an empty/non-JSON body on a bind_tools
+# call — a transient hiccup (see CLAUDE.local.md item 3), not a fixed broken
+# case: repeat sweeps hit a different donor each time and clear on a bare
+# re-run. Re-invoking the tool call itself (not just re-parsing) is bounded so
+# a genuinely broken response still fails loudly.
+TOOL_RESULT_MAX_ATTEMPTS = 3
 
 
 async def fetch_core_data(state: PipelineState) -> dict:
@@ -78,8 +85,17 @@ async def gather_context(state: PipelineState) -> dict:
             break
 
         for call in response.tool_calls:
-            tool_result = await tools[call["name"]].ainvoke(call["args"])
-            parsed = parse_list(tool_result)
+            last_error: json.JSONDecodeError | None = None
+            for _ in range(TOOL_RESULT_MAX_ATTEMPTS):
+                tool_result = await tools[call["name"]].ainvoke(call["args"])
+                try:
+                    parsed = parse_list(tool_result)
+                    last_error = None
+                    break
+                except json.JSONDecodeError as exc:
+                    last_error = exc
+            if last_error is not None:
+                raise last_error
             if call["name"] == "get_donation_history":
                 donation_history = parsed
             elif call["name"] == "find_potential_duplicate_donors":
