@@ -5,7 +5,7 @@
       "description": "Semantic search over campaign knowledge, scored apart from generation",
       "runs_per_case": 3,
       "case_count": 10,
-      "duration_s": 13.67,
+      "duration_s": 15.37,
       "metrics": [
         {
           "name": "recall@1",
@@ -33,13 +33,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 455.0,
+          "value": 512.0,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 1224.0,
+          "value": 3278.0,
           "detail": null,
           "note": null
         }
@@ -75,8 +75,302 @@
       ],
       "errors": [],
       "scorer_errors": []
+    },
+    "judge_control": {
+      "suite": "judge_control",
+      "description": "Does the groundedness judge still detect fabrication? (controls the scorer itself)",
+      "runs_per_case": 3,
+      "case_count": 5,
+      "duration_s": 10.14,
+      "metrics": [
+        {
+          "name": "judge_verdict_correct",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_mean",
+          "value": 675.7,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_max",
+          "value": 2787.0,
+          "detail": null,
+          "note": null
+        }
+      ],
+      "flaky_case_ids": [],
+      "failures": [],
+      "errors": [],
+      "scorer_errors": []
+    },
+    "verification": {
+      "suite": "verification",
+      "description": "Donor eligibility classification + confidence calibration",
+      "runs_per_case": 3,
+      "case_count": 11,
+      "duration_s": 483.43,
+      "metrics": [
+        {
+          "name": "eligible_correct",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "accuracy",
+          "value": 1.0,
+          "detail": {
+            "per_class": {
+              "False": {
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0,
+                "support": 6
+              },
+              "True": {
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0,
+                "support": 27
+              }
+            },
+            "confusion": {
+              "True->True": 27,
+              "False->False": 6
+            }
+          },
+          "note": null
+        },
+        {
+          "name": "recall_ineligible",
+          "value": 1.0,
+          "detail": null,
+          "note": "recall on False \u2014 the error class that carries real-world risk"
+        },
+        {
+          "name": "expected_calibration_error",
+          "value": 0.0985,
+          "detail": {
+            "buckets": [
+              {
+                "range": "0.7-0.8",
+                "count": 6,
+                "mean_confidence": 0.75,
+                "accuracy": 1.0,
+                "gap": 0.25
+              },
+              {
+                "range": "0.8-0.9",
+                "count": 6,
+                "mean_confidence": 0.8,
+                "accuracy": 1.0,
+                "gap": 0.2
+              },
+              {
+                "range": "0.9-1.0",
+                "count": 21,
+                "mean_confidence": 0.9738,
+                "accuracy": 1.0,
+                "gap": 0.0262
+              }
+            ]
+          },
+          "note": "n=33 \u2014 enough to demonstrate the mechanism and spot gross miscalibration, not enough to set production thresholds from"
+        },
+        {
+          "name": "latency_ms_mean",
+          "value": 14649.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_max",
+          "value": 20562.0,
+          "detail": null,
+          "note": null
+        }
+      ],
+      "flaky_case_ids": [],
+      "failures": [],
+      "errors": [],
+      "scorer_errors": []
+    },
+    "recommendation": {
+      "suite": "recommendation",
+      "description": "Ask-selection rule compliance + RAG groundedness (judged by a separate model)",
+      "runs_per_case": 3,
+      "case_count": 5,
+      "duration_s": 163.69,
+      "metrics": [
+        {
+          "name": "ask_in_ladder",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "fields_unchanged",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "sources_valid",
+          "value": 0.8667,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "outlier_respected",
+          "value": 0.8,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "ask_is_positive",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "groundedness",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_mean",
+          "value": 10326.9,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_max",
+          "value": 13023.0,
+          "detail": null,
+          "note": null
+        }
+      ],
+      "flaky_case_ids": [
+        "d-0001",
+        "d-0008"
+      ],
+      "failures": [
+        {
+          "case_id": "d-0001",
+          "scorer": "sources_valid",
+          "mean_score": 0.667,
+          "run_scores": [
+            1.0,
+            0.0,
+            1.0
+          ],
+          "expected": {
+            "scenario": "active donor, single clean gift"
+          }
+        },
+        {
+          "case_id": "d-0008",
+          "scorer": "sources_valid",
+          "mean_score": 0.667,
+          "run_scores": [
+            1.0,
+            1.0,
+            0.0
+          ],
+          "expected": {
+            "scenario": "small-dollar recurring donor"
+          }
+        },
+        {
+          "case_id": "d-0006",
+          "scorer": "outlier_respected",
+          "mean_score": 0.0,
+          "run_scores": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "expected": {
+            "scenario": "anomalous $50k outlier that must stay excluded from the anchor"
+          }
+        }
+      ],
+      "errors": [],
+      "scorer_errors": []
+    },
+    "trajectory": {
+      "suite": "trajectory",
+      "description": "End-to-end routing: terminal state and node path across the whole graph",
+      "runs_per_case": 3,
+      "case_count": 11,
+      "duration_s": 731.19,
+      "metrics": [
+        {
+          "name": "terminal_state_correct",
+          "value": 0.9091,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "node_path_exact",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "reached_recommendation",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_mean",
+          "value": 22157.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_max",
+          "value": 33555.0,
+          "detail": null,
+          "note": null
+        }
+      ],
+      "flaky_case_ids": [],
+      "failures": [
+        {
+          "case_id": "d-0010",
+          "scorer": "terminal_state_correct",
+          "mean_score": 0.0,
+          "run_scores": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "expected": {
+            "terminal": "paused:address",
+            "path": [
+              "fetch_core_data",
+              "gather_context",
+              "synthesize_verdict",
+              "verify_address",
+              "assess_and_normalize"
+            ],
+            "scenario": "vacant address, no forwarding found"
+          }
+        }
+      ],
+      "errors": [],
+      "scorer_errors": []
     }
   },
-  "generated_at": "2026-07-19T18:13:16.568738+00:00",
-  "git_sha": "ff1a3b6e819960d041d354bc5f17a01fb54f816e"
+  "generated_at": "2026-07-21T04:42:37.994460+00:00",
+  "git_sha": "91836ec8f3b77de949bed59544aaefe0921c084b",
+  "llm_model": "qwen2.5:14b",
+  "judge_model": "llama3.1:8b"
 }
