@@ -54,6 +54,17 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp-compliance:
+    build: ./backend
+    command: ["python", "-m", "app.mcp_servers.compliance.server"]
+    ports:
+      - "8102:8102"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8102), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   celery-worker:
     build: ./backend
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
@@ -66,6 +77,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp
       MCP_ADDRESS_URL: http://mcp-address:8101/mcp
+      MCP_COMPLIANCE_URL: http://mcp-compliance:8102/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-google_genai}
       LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
       JUDGE_PROVIDER: ${JUDGE_PROVIDER:-google_genai}
@@ -84,6 +96,8 @@ services:
         condition: service_healthy
       mcp-address:
         condition: service_healthy
+      mcp-compliance:
+        condition: service_healthy
 
   api:
     build: ./backend
@@ -96,6 +110,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp
       MCP_ADDRESS_URL: http://mcp-address:8101/mcp
+      MCP_COMPLIANCE_URL: http://mcp-compliance:8102/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-google_genai}
       LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
       JUDGE_PROVIDER: ${JUDGE_PROVIDER:-google_genai}
@@ -115,6 +130,8 @@ services:
       mcp-crm:
         condition: service_healthy
       mcp-address:
+        condition: service_healthy
+      mcp-compliance:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]

@@ -50,6 +50,7 @@ class Settings(BaseSettings):
 
     mcp_crm_url: str = "http://localhost:8100/mcp"
     mcp_address_url: str = "http://localhost:8101/mcp"
+    mcp_compliance_url: str = "http://localhost:8102/mcp"
 
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
@@ -68,6 +69,12 @@ class Settings(BaseSettings):
     # draft is graded on groundedness in retrieved knowledge, which is a more
     # concrete thing to be confident or unconfident about than a future gift.
     confidence_threshold_campaign_personalization: float = 0.60
+    # Advisory (non-blocking) bar for the letter-content risk review. The
+    # *blocking* compliance trigger is deterministic (state solicitation
+    # registration, see route_after_disclosures) — this threshold only flags
+    # `needs_review` when the LLM's own risk assessment is a close call,
+    # same non-blocking role as the recommendation/personalization thresholds.
+    confidence_threshold_compliance: float = 0.75
     # A recommended ask at or above this dollar amount is a major-gift decision
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0

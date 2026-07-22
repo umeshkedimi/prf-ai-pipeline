@@ -25,6 +25,7 @@ DOCS: dict[str, tuple[str, str]] = {
     "success_stories.md": ("Donor-Funded Success Stories", "success_story"),
     "ask_strategy_guidelines.md": ("Ask Strategy Guidelines", "guideline"),
     "donor_stewardship.md": ("Donor Stewardship Principles", "guideline"),
+    "compliance_guidelines.md": ("Compliance Guidelines for Fundraising Appeals", "compliance"),
 }
 
 

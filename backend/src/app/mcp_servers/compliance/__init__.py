@@ -1,1 +1,1 @@
-"""Compliance MCP server — placeholder, built in Phase 5."""
+"""Compliance MCP server — state registration status and disclosure lookups (Phase 5)."""
