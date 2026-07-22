@@ -5,6 +5,7 @@ from dataclasses import replace
 
 from app.evals.suites import (
     campaign_personalization,
+    compliance,
     judge_control,
     recommendation,
     retrieval,
@@ -23,6 +24,7 @@ ALL_SUITES: dict[str, EvalSuite] = {
         verification.SUITE,
         recommendation.SUITE,
         campaign_personalization.SUITE,
+        compliance.SUITE,
         trajectory.SUITE,
     )
 }

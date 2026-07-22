@@ -28,18 +28,25 @@ FULL_PIPELINE = [*THROUGH_ADDRESS, "compute_rfm", "recommend_ask"]
 # (see route_after_recommendation) — FULL_PIPELINE is that donor's real path.
 # Everyone below the threshold continues one step further.
 PERSONALIZED_PIPELINE = [*FULL_PIPELINE, "personalize_letter"]
+# Not registered to solicit in the donor's state pauses right after the
+# disclosure lookup (see route_after_disclosures) — review_letter_compliance
+# never runs, since there's no point judging letter wording for a letter that
+# can't legally mail regardless.
+COMPLIANCE_BLOCKED_PIPELINE = [*PERSONALIZED_PIPELINE, "gather_disclosures"]
+# Registered in-state: the letter-content review actually runs.
+COMPLIANT_PIPELINE = [*COMPLIANCE_BLOCKED_PIPELINE, "review_letter_compliance"]
 
 # (external_id, terminal state, expected node path, scenario)
 # terminal state is one of: "end" (reached END) or "paused:<stage>".
 _LABELS: list[tuple[str, str, list[str], str]] = [
-    ("d-0001", "end", PERSONALIZED_PIPELINE, "clean donor runs the full pipeline"),
-    ("d-0002", "end", PERSONALIZED_PIPELINE, "duplicate flag is advisory, must not block"),
-    ("d-0003", "end", PERSONALIZED_PIPELINE, "duplicate flag is advisory, must not block"),
+    ("d-0001", "end", COMPLIANT_PIPELINE, "clean donor runs the full pipeline"),
+    ("d-0002", "end", COMPLIANT_PIPELINE, "duplicate flag is advisory, must not block"),
+    ("d-0003", "end", COMPLIANT_PIPELINE, "duplicate flag is advisory, must not block"),
     ("d-0004", "end", VERIFICATION_ONLY, "do-not-contact stops before address work"),
     ("d-0005", "end", VERIFICATION_ONLY, "suppressed donor stops before address work"),
-    ("d-0006", "end", PERSONALIZED_PIPELINE, "suspicious flag advisory; outlier keeps ask modest"),
+    ("d-0006", "end", COMPLIANT_PIPELINE, "suspicious flag advisory; outlier keeps ask modest"),
     ("d-0007", "paused:address", THROUGH_ADDRESS, "no address on file pauses for review"),
-    ("d-0008", "end", PERSONALIZED_PIPELINE, "clean recurring donor"),
+    ("d-0008", "end", COMPLIANT_PIPELINE, "clean recurring donor"),
     ("d-0009", "paused:address", THROUGH_ADDRESS, "moved, uncertain forwarding address"),
     ("d-0010", "paused:address", THROUGH_ADDRESS, "vacant address, no forwarding found"),
     (
@@ -47,6 +54,12 @@ _LABELS: list[tuple[str, str, list[str], str]] = [
         "paused:recommendation",
         FULL_PIPELINE,
         "clean address but major-gift ask pauses on the second stage",
+    ),
+    (
+        "d-0012",
+        "paused:compliance",
+        COMPLIANCE_BLOCKED_PIPELINE,
+        "clean donor blocked on state solicitation registration — third stage",
     ),
 ]
 

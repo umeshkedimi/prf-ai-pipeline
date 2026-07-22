@@ -199,6 +199,25 @@ DONORS = [
             (2000.00, date(2026, 5, 1)),
         ],
     },
+    # Phase 5 addition: eligible, clean deliverable address, modest ask (clears
+    # both earlier review gates) — but the org's compliance fixture marks this
+    # donor's state as one it isn't registered to solicit in yet. Exercises the
+    # compliance-stage human-review interrupt on its own, the same way d-0011
+    # exercises the recommendation-stage one.
+    {
+        "external_id": "d-0012",
+        "first_name": "Diane",
+        "last_name": "Castillo",
+        "email": "diane.castillo@example.com",
+        "address_line1": "12 Palm Ave",
+        "city": "Orlando",
+        "state": "FL",
+        "postal_code": "32801",
+        "do_not_contact": False,
+        "notes": "Clean, eligible donor; state charitable-solicitation registration pending.",
+        "campaign": "2026 Spring Appeal",
+        "donations": [(120.00, date(2026, 1, 10))],
+    },
 ]
 
 
