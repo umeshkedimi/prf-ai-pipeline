@@ -13,12 +13,21 @@ async def human_review(state: PipelineState) -> dict:
     is resumed until interrupt() actually returns a value (a documented
     LangGraph gotcha), so all side effects (the audit log write) live after.
 
-    One node serves two review stages. Recommendation only exists once address
-    is fully resolved, so its presence is a reliable, order-guaranteed
-    discriminator of which stage paused — no explicit flag needed."""
-    stage = "recommendation" if state.get("recommendation_result") is not None else "address"
+    One node serves three review stages. Each later stage only exists once the
+    one before it is fully resolved, so checking most-downstream-first is a
+    reliable, order-guaranteed discriminator of which stage paused — no
+    explicit flag needed."""
+    if state.get("compliance_disclosures") is not None:
+        stage = "compliance"
+    elif state.get("recommendation_result") is not None:
+        stage = "recommendation"
+    else:
+        stage = "address"
 
-    if stage == "recommendation":
+    if stage == "compliance":
+        under_review = state.get("compliance_disclosures") or {}
+        reason = "not_registered_to_solicit_in_state"
+    elif stage == "recommendation":
         under_review = state.get("recommendation_result") or {}
         reason = "recommendation_requires_approval"
     else:
@@ -37,7 +46,15 @@ async def human_review(state: PipelineState) -> dict:
     updated = dict(under_review)
     action = decision.get("action")
 
-    if stage == "recommendation":
+    if stage == "compliance":
+        # No numeric/address field applies here, so "modify" behaves like
+        # "approve" — the reviewer's notes carry the reason (e.g. registration
+        # was completed since this fixture was last updated). "reject" leaves
+        # the state legally blocked.
+        updated["registered_to_solicit"] = action != "reject"
+        updated["human_reviewed"] = True
+        result_key = "compliance_disclosures"
+    elif stage == "recommendation":
         if action == "modify" and decision.get("updated_ask_amount") is not None:
             updated["recommended_ask"] = float(decision["updated_ask_amount"])
         elif action == "reject":

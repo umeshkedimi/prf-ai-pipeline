@@ -2,9 +2,9 @@ from typing import Any, TypedDict
 
 
 class PipelineState(TypedDict, total=False):
-    """Shared state threaded through the full 7-agent graph. Keys for phases
-    5-6 are stubbed here (unpopulated) so those phases extend this type
-    instead of reshaping it."""
+    """Shared state threaded through the full 7-agent graph. Keys for phase 6
+    are stubbed here (unpopulated) so that phase extends this type instead of
+    reshaping it."""
 
     # --- shared workflow context ---
     workflow_run_id: str
@@ -28,7 +28,8 @@ class PipelineState(TypedDict, total=False):
     personalization_result: dict[str, Any] | None
 
     # --- 5. Compliance (Phase 5) ---
-    compliance_result: dict[str, Any] | None
+    compliance_disclosures: dict[str, Any] | None  # raw gather_disclosures MCP output
+    compliance_result: dict[str, Any] | None  # final LetterComplianceAssessment + disclosures
 
     # --- 6. PDF Generation (Phase 6) ---
     pdf_result: dict[str, Any] | None

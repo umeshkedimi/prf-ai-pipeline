@@ -116,6 +116,10 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         aggregate["donation_recommendation"] = result["recommendation_result"]
     if result.get("personalization_result") is not None:
         aggregate["campaign_personalization"] = result["personalization_result"]
+    if result.get("compliance_result") is not None:
+        aggregate["compliance"] = result["compliance_result"]
+    elif result.get("compliance_disclosures") is not None:
+        aggregate["compliance"] = result["compliance_disclosures"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
 
@@ -124,10 +128,30 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
     # review is no longer terminal now that recommendation runs after it. A
     # result carries `human_reviewed=True` when a human authoritatively signed
     # off on that specific stage (no further confidence gating applies to it).
+    comp = result.get("compliance_result")
+    comp_disclosures = result.get("compliance_disclosures")
     pers = result.get("personalization_result")
     rec = result.get("recommendation_result")
     addr = result.get("address_result")
-    if pers is not None:
+    if comp is not None:
+        # review_letter_compliance ran: a genuine LLM risk assessment exists,
+        # advisory only (needs_review), same role as personalization's gate.
+        confidence = comp.get("confidence")
+        status = (
+            "completed"
+            if confidence >= settings.confidence_threshold_compliance
+            else "needs_review"
+        )
+        current_agent = "compliance"
+    elif comp_disclosures is not None:
+        # Blocked on state solicitation registration before any letter-content
+        # review ran (route_after_disclosures). No LLM assessment exists for
+        # this run, so there's no confidence to report; by the time this
+        # branch is reached the interrupt above has already been resolved.
+        confidence = None
+        status = "completed"
+        current_agent = "human_review"
+    elif pers is not None:
         # personalize_letter has no interrupt of its own — low confidence here
         # is advisory only, exactly like the stages below.
         confidence = pers.get("confidence")

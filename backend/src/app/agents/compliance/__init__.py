@@ -1,1 +1,1 @@
-"""Compliance Agent — placeholder, built in Phase 5."""
+"""Compliance Agent — disclosure lookup and letter risk review (Phase 5)."""
