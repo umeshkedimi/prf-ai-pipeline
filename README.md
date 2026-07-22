@@ -49,7 +49,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | **2** ✅ done | Address Intelligence agent + Address MCP + first real `interrupt()`-based Human Review node + confidence routing, chained after Donor Verification |
 | **3** ✅ done | Donation Recommendation agent (deterministic RFM + ask ladder) + pgvector RAG over campaign knowledge + a second review trigger on major-gift asks |
 | **4** ✅ done | Campaign Personalization agent (deterministic tone lookup + RAG-grounded letter draft), chained after Donation Recommendation |
-| 5 | Compliance agent + Compliance MCP |
+| **5** ✅ done | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP, chained after Campaign Personalization; a third review trigger on unregistered-state solicitation |
 | 6 | PDF Generation agent + Print Vendor MCP |
 | 7 | Review queue + full Human Review dashboard workflows, multi-agent graph assembly |
 | 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening |
@@ -83,7 +83,15 @@ START → fetch_core_data → gather_context → synthesize_verdict
                                        │            └─ rejected (ask zeroed) → END
                                        └─ else → personalize_letter   [RAG over campaign knowledge]
                                                        │
-                                                       └─ END   (Phase 5+ continues here)
+                                     personalize_letter → gather_disclosures
+                                                       │
+                                                       ├─ not registered to solicit in-state
+                                                       │      → human_review [interrupt, stage=compliance]
+                                                       │            └─ approve/reject/modify → END either way
+                                                       └─ registered → review_letter_compliance
+                                                                          [RAG over compliance guidance]
+                                                                          │
+                                                                          └─ END   (Phase 6+ continues here)
 ```
 
 **Donor Verification** (Phase 1) — 3 nodes, each a real checkpoint boundary:
@@ -110,16 +118,22 @@ The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history
 
 1. **`personalize_letter`** — a deterministic tone lookup keyed on the donor's RFM segment (gentle/reconnecting for lapsed, an invitation to step up for loyal, personal/relationship-based for major — same segment vocabulary `recommend_ask` uses), then an LLM drafts the appeal letter within that fixed tone, grounded in retrieved stewardship and impact knowledge. The model never chooses the tone and never invents a cited figure; it only drafts. A rejected recommendation (ask zeroed by human_review) skips this node entirely — there's nothing to personalize for a $0 letter.
 
-**Human Review** (Phases 2–4) — the platform's genuine pause: a real LangGraph `interrupt()`, not a status flag. One node serves **two review stages**, discriminated by whether a recommendation exists yet (recommendation only exists once the address is resolved, so ordering makes this reliable):
+**Compliance** (Phase 5) — 2 nodes, reached once a letter has been drafted:
+
+1. **`gather_disclosures`** — deterministic `get_disclosure_requirements` MCP call keyed on the donor's state. Whether the org is registered to solicit there at all is a legal fact, not a judgment call — if not, there is no letter-content review to make, so the graph pauses immediately rather than spending an LLM call on wording for a letter that can't legally mail regardless.
+2. **`review_letter_compliance`** — only reached when registered. Retrieves compliance guidance from pgvector and has an LLM judge the drafted letter for donor-rights/tax-language risk (`approved`, `confidence`, `flagged_issues[]`, `reasoning[]`). Required disclosures are merged in afterward from `gather_disclosures`' output, never routed through the LLM — legal boilerplate is never something a model is asked to reproduce.
+
+**Human Review** (Phases 2–5) — the platform's genuine pause: a real LangGraph `interrupt()`, not a status flag. One node serves **three review stages**, discriminated by checking most-downstream-first (each later stage's result key only exists once the one before it is resolved, so ordering makes this reliable):
 
 - **address stage** — address confidence below threshold. Resuming continues into the recommendation if the address is now deliverable, or stops if it was rejected.
 - **recommendation stage** — the recommended ask is major-gift sized. Resuming continues into personalization if the (possibly human-adjusted) ask is still positive, or stops if it was rejected.
+- **compliance stage** — the org isn't registered to solicit in the donor's state. There's no further stage to continue into yet (Phase 6 doesn't exist), so the run ends either way — the decision itself (approve/reject/modify, reviewer, notes) is still recorded for the audit trail.
 
 The workflow genuinely cannot proceed until a decision (`approve`/`reject`/`modify`) arrives via `POST /workflow/{id}/review`. Donor Verification's low-confidence outcomes (duplicate/suspicious) stay advisory-only, per the spec's trigger list (address confidence, ask amount, compliance, missing info — not "possible duplicate").
 
-**Why the ask-amount gate is deterministic:** the blocking trigger is the ask amount alone, never the model's confidence. Routing a *blocking* pause off a non-deterministic float would let the same donor take different paths on identical data — unacceptable when the output is a physical letter. Recommendation confidence is also a prediction about a future gift rather than an assessment of a present fact, so it runs honestly lower (~0.5 for the thin single-gift histories that are entirely normal here); it drives the advisory `needs_review` flag instead, with a threshold calibrated to that scale (0.50, vs 0.80 for the factual agents). Personalization's advisory threshold (0.60) sits between the two: drafting is judgment like recommendation, but groundedness in retrieved knowledge is a more concrete thing to be confident about than a future gift.
+**Why the ask-amount and registration gates are deterministic:** both blocking triggers are deterministic facts (the ask amount, the state-registration flag) never the model's confidence. Routing a *blocking* pause off a non-deterministic float would let the same donor take different paths on identical data — unacceptable when the output is a physical letter. The compliance agent's own LLM call (letter-risk review) follows the same pattern as recommendation and personalization: it's advisory, driving `needs_review` rather than a pause. Recommendation confidence is a prediction about a future gift rather than an assessment of a present fact, so it runs honestly lower (~0.5 for the thin single-gift histories that are entirely normal here); it drives the advisory `needs_review` flag instead, with a threshold calibrated to that scale (0.50, vs 0.80 for the factual agents). Personalization's advisory threshold (0.60) sits between the two: drafting is judgment like recommendation, but groundedness in retrieved knowledge is a more concrete thing to be confident about than a future gift. Compliance's threshold (0.75) sits closer to the factual agents': judging whether *already-written* text violates a guideline is closer to a factual read than a prediction.
 
-Every node writes a row to `agent_audit_log` (input snapshot, output, confidence, reasoning, tool calls, model, latency) — the explainability trail exposed via `GET /workflow/{id}?verbose=true`. `recommend_ask` and `personalize_letter` additionally record which knowledge chunks were retrieved and their cosine distances, so a reviewer can see exactly what each was grounded in.
+Every node writes a row to `agent_audit_log` (input snapshot, output, confidence, reasoning, tool calls, model, latency) — the explainability trail exposed via `GET /workflow/{id}?verbose=true`. `recommend_ask`, `personalize_letter`, and `review_letter_compliance` additionally record which knowledge chunks were retrieved and their cosine distances, so a reviewer can see exactly what each was grounded in.
 
 **Status semantics:**
 - `pending` / `running` — self-explanatory.
@@ -127,9 +141,9 @@ Every node writes a row to `agent_audit_log` (input snapshot, output, confidence
 - `needs_review` — an advisory, *non-blocking* flag: the graph already reached `END`, nothing is stuck, it just means a low-confidence outcome is worth a human glance eventually.
 - `completed` — reached `END` cleanly, or a paused workflow was resumed with a decision (a human's call is authoritative — no further confidence gating applies to the stage they signed off on).
 
-Status and confidence are driven by the **terminal stage** a run reached, plus a per-result `human_reviewed` flag — not by whether any human decision happened somewhere along the way. That distinction matters from Phase 3 on: an address-stage review is no longer the last thing that runs, since the recommendation follows it, and from Phase 4 on a recommendation-stage review isn't terminal either, since personalization follows that.
+Status and confidence are driven by the **terminal stage** a run reached, plus a per-result `human_reviewed` flag — not by whether any human decision happened somewhere along the way. That distinction matters from Phase 3 on: an address-stage review is no longer the last thing that runs, since the recommendation follows it, from Phase 4 on a recommendation-stage review isn't terminal either, since personalization follows that, and from Phase 5 on personalization isn't terminal either, since compliance follows it. A run blocked on state registration before any letter-content review ran has no LLM confidence to report at all (`confidence: null`) — there's honestly nothing to report a number for.
 
-`workflow_runs.result` aggregates every agent that ran: `{"donor_verification": {...}, "address_intelligence": {...}|omitted, "donation_recommendation": {...}|omitted, "campaign_personalization": {...}|omitted, "human_review": {...}|omitted}` — a reviewer sees the whole picture, not just the last agent's output.
+`workflow_runs.result` aggregates every agent that ran: `{"donor_verification": {...}, "address_intelligence": {...}|omitted, "donation_recommendation": {...}|omitted, "campaign_personalization": {...}|omitted, "compliance": {...}|omitted, "human_review": {...}|omitted}` — a reviewer sees the whole picture, not just the last agent's output.
 
 ## Development
 
@@ -151,7 +165,7 @@ uv run alembic upgrade head
 uv run python scripts/seed_db.py
 uv run python scripts/ingest_knowledge.py   # embed campaign knowledge into pgvector
 cd ..
-docker compose up -d --build mcp-crm mcp-address celery-worker api
+docker compose up -d --build mcp-crm mcp-address mcp-compliance celery-worker api
 ```
 
 `ingest_knowledge.py` is idempotent — re-run it after editing anything in `backend/knowledge/` and it refreshes those documents in place.
@@ -215,24 +229,53 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
 #      sources: ["Ask Strategy Guidelines", "Donor-Funded Success Stories"], ... }
 ```
 
+### Demo: the compliance review loop (the third interrupt stage)
+
+```bash
+curl -X POST localhost:8000/api/v1/workflow/run \
+  -H "Content-Type: application/json" -d '{"donor_id": "d-0012"}'
+
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
+# -> status: awaiting_review, pending_review: { stage: "compliance",
+#      reason: "not_registered_to_solicit_in_state",
+#      under_review: { registered_to_solicit: false,
+#        required_disclosures: ["No goods or services were provided..."] } }
+#    d-0012 clears both earlier gates (clean address, modest ask) — this is
+#    purely the state-registration fact from gather_disclosures. No LLM ever
+#    ran a letter-risk review for this donor; there's nothing to judge for a
+#    letter that can't legally mail regardless.
+
+curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
+  -H "Content-Type: application/json" \
+  -d '{"action": "approve", "reviewer": "demo", "notes": "registration filed this week, confirmed with state AG office"}'
+# -> 202 — resumes and ends either way (Phase 6 doesn't exist yet); the
+#    decision is recorded in result.human_review regardless of outcome
+
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
+# -> status: completed, current_agent: human_review, confidence: null
+#    (no LLM assessment ever ran for this stage — nothing to report a number for),
+#    result.compliance: { registered_to_solicit: true, human_reviewed: true, ... }
+```
+
 `donor_id` accepts either the CRM's `external_id` (e.g. `"d-0009"`, as seeded) or our internal UUID directly.
 
-The seed dataset (`backend/scripts/seed_db.py`, 11 donors) covers every branch through all four agents — running all eleven through the real stack gives exactly:
+The seed dataset (`backend/scripts/seed_db.py`, 12 donors) covers every branch through all five agents — running all twelve through the real stack gives exactly:
 
 | donor | scenario | final status |
 |---|---|---|
-| d-0001 | clean donor, clean address | `completed`, ask $225, letter personalized (confidence 0.95) |
-| d-0002 / d-0003 | duplicate pair (advisory-only, doesn't block), clean addresses | `completed`, ask $110, letter personalized — the duplicate flag stays visible in `result.donor_verification` |
+| d-0001 | clean donor, clean address | `completed`, ask $225, letter personalized and cleared compliance review (confidence 0.95) |
+| d-0002 / d-0003 | duplicate pair (advisory-only, doesn't block), clean addresses | `completed`, ask $110, letter personalized and cleared compliance review — the duplicate flag stays visible in `result.donor_verification` |
 | d-0004 | do-not-contact | `completed`, ineligible (graph ends before address intelligence) |
 | d-0005 | suppressed (deceased) | `completed`, ineligible |
-| d-0006 | suspicious $50k outlier donation, PO box address | `completed`, ask $110 — the outlier is excluded from the anchor rather than driving a five-figure ask; letter personalized (confidence 0.9) |
+| d-0006 | suspicious $50k outlier donation, PO box address | `completed`, ask $110 — the outlier is excluded from the anchor rather than driving a five-figure ask; letter personalized and cleared compliance review (confidence 0.9) |
 | d-0007 | malformed — no address on file | `awaiting_review` (address) → rejected → `completed`, no ask recommended |
-| d-0008 | clean recurring small donor | `completed`, ask $40, letter personalized (confidence 0.95) |
-| d-0009 | moved, forwarding address found but uncertain | `awaiting_review` (address) → modified → `completed`, ask $75, letter personalized |
+| d-0008 | clean recurring small donor | `completed`, ask $40, letter personalized and cleared compliance review (confidence 0.95) |
+| d-0009 | moved, forwarding address found but uncertain | `awaiting_review` (address) → modified → `completed`, ask $75, letter personalized and cleared compliance review |
 | d-0010 | vacant/undeliverable, no forwarding found | `awaiting_review` (address) → approved → `completed`, undeliverable so no ask |
-| **d-0011** | long-tenured major donor, clean address | `awaiting_review` (**recommendation**) → capped → `completed`, ask $500, letter personalized in a "personal, relationship-based" tone |
+| d-0011 | long-tenured major donor, clean address | `awaiting_review` (**recommendation**) → capped → `completed`, ask $500, letter personalized in a "personal, relationship-based" tone, cleared compliance review |
+| **d-0012** | clean donor, clean address, modest ask — but state solicitation registration pending | `awaiting_review` (**compliance**) → approved → `completed`, confidence `null` (no letter-risk review ran) |
 
-Note how the two interrupt stages are exercised by different donors: d-0007/d-0009/d-0010 pause on the address and never reach a major-gift decision, while d-0011 sails through address checks and pauses purely on the ask amount. Every donor that clears both review gates now continues on into `personalize_letter` — recommendation is advisory-gated (0.50 threshold) rather than blocking, same as before, so a run can finish `completed` even when the recommendation itself was low-confidence; personalization runs regardless and is judged against its own 0.60 threshold.
+Note how the three interrupt stages are exercised by different donors: d-0007/d-0009/d-0010 pause on the address and never reach a major-gift decision, d-0011 sails through address checks and pauses purely on the ask amount, and d-0012 sails through both of those and pauses purely on state solicitation registration — a deterministic legal fact, not a model confidence score, same as the ask-amount gate. Every donor that clears all three review gates continues on through `personalize_letter` and `review_letter_compliance` — recommendation (0.50 threshold), personalization (0.60), and compliance's own letter-risk review (0.75) are all advisory-gated rather than blocking, so a run can finish `completed` even when one of those confidences was low; each later stage runs regardless of the one before it.
 
 ### Demo: checkpoint/resume against a real process crash
 
@@ -285,6 +328,7 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `verification` | eligibility classification + per-class recall + confidence calibration |
 | `recommendation` | ask-selection rule compliance + RAG groundedness |
 | `campaign_personalization` | letter-draft rule compliance (tone/segment fidelity, ask reference) + RAG groundedness |
+| `compliance` | disclosure-lookup correctness (deterministic) + letter-content risk review |
 | `trajectory` | end-to-end routing: terminal state and node path (expensive, opt-in) |
 
 **Why RAG is scored in two halves.** A wrong answer means either retrieval never surfaced the right chunk, or it did and generation mishandled it. The final output cannot distinguish those, so retrieval is measured independently against known-correct documents.
