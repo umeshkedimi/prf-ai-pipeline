@@ -1,1 +1,1 @@
-"""PDF Generation Agent — placeholder, built in Phase 6."""
+"""PDF Generation agent — print-ready letter assembly and vendor submission (Phase 6)."""

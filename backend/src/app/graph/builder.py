@@ -10,6 +10,7 @@ from app.agents.compliance.agent import gather_disclosures, review_letter_compli
 from app.agents.donation_recommendation.agent import compute_rfm, recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
 from app.agents.human_review.agent import human_review
+from app.agents.pdf_generation.agent import generate_pdf
 from app.core.config import get_settings
 from app.graph.checkpointer import get_checkpointer
 from app.graph.state import PipelineState
@@ -43,16 +44,19 @@ def route_after_human_review(state: PipelineState) -> str:
     downstream-first, since an upstream stage's result key is still present
     (unchanged) by the time a later stage pauses.
 
-    A compliance-stage decision (state-registration block) ends the run either
-    way — Phase 6 doesn't exist yet, so there's nothing to continue into; the
-    decision itself is still recorded. A recommendation-stage decision
-    continues into personalization if the (possibly human-adjusted) ask is
-    still positive; a rejected ask is zeroed out by human_review, and there's
-    nothing to personalize for a $0 letter. An address-stage decision
-    (recommendation not computed yet) continues into the recommendation if the
-    address is now deliverable, else stops (rejected/undeliverable → can't mail)."""
+    A compliance-stage decision continues into the letter-content review if the
+    human's decision leaves the org registered to solicit (approve/modify —
+    "modify" here means the reviewer attests registration was resolved since
+    the fixture was last updated); a reject leaves it legally blocked and the
+    run ends. A recommendation-stage decision continues into personalization
+    if the (possibly human-adjusted) ask is still positive; a rejected ask is
+    zeroed out by human_review, and there's nothing to personalize for a $0
+    letter. An address-stage decision (recommendation not computed yet)
+    continues into the recommendation if the address is now deliverable, else
+    stops (rejected/undeliverable → can't mail)."""
     if state.get("compliance_disclosures") is not None:
-        return END
+        disclosures = state.get("compliance_disclosures") or {}
+        return "review_letter_compliance" if disclosures.get("registered_to_solicit") else END
     if state.get("recommendation_result") is not None:
         rec = state.get("recommendation_result") or {}
         return "personalize_letter" if rec.get("recommended_ask", 0) > 0 else END
@@ -107,6 +111,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("personalize_letter", personalize_letter)
     graph.add_node("gather_disclosures", gather_disclosures)
     graph.add_node("review_letter_compliance", review_letter_compliance)
+    graph.add_node("generate_pdf", generate_pdf)
 
     graph.add_edge(START, "fetch_core_data")
     graph.add_edge("fetch_core_data", "gather_context")
@@ -132,6 +137,7 @@ def _build_graph() -> StateGraph:
         {
             "compute_rfm": "compute_rfm",
             "personalize_letter": "personalize_letter",
+            "review_letter_compliance": "review_letter_compliance",
             END: END,
         },
     )
@@ -141,7 +147,8 @@ def _build_graph() -> StateGraph:
         route_after_disclosures,
         {"human_review": "human_review", "review_letter_compliance": "review_letter_compliance"},
     )
-    graph.add_edge("review_letter_compliance", END)
+    graph.add_edge("review_letter_compliance", "generate_pdf")
+    graph.add_edge("generate_pdf", END)
     return graph
 
 

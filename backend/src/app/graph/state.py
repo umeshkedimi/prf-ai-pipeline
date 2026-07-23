@@ -2,9 +2,7 @@ from typing import Any, TypedDict
 
 
 class PipelineState(TypedDict, total=False):
-    """Shared state threaded through the full 7-agent graph. Keys for phase 6
-    are stubbed here (unpopulated) so that phase extends this type instead of
-    reshaping it."""
+    """Shared state threaded through the full 7-agent graph."""
 
     # --- shared workflow context ---
     workflow_run_id: str

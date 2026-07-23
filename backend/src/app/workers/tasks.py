@@ -120,6 +120,8 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         aggregate["compliance"] = result["compliance_result"]
     elif result.get("compliance_disclosures") is not None:
         aggregate["compliance"] = result["compliance_disclosures"]
+    if result.get("pdf_result") is not None:
+        aggregate["pdf_generation"] = result["pdf_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
 
@@ -128,12 +130,20 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
     # review is no longer terminal now that recommendation runs after it. A
     # result carries `human_reviewed=True` when a human authoritatively signed
     # off on that specific stage (no further confidence gating applies to it).
+    pdf = result.get("pdf_result")
     comp = result.get("compliance_result")
     comp_disclosures = result.get("compliance_disclosures")
     pers = result.get("personalization_result")
     rec = result.get("recommendation_result")
     addr = result.get("address_result")
-    if comp is not None:
+    if pdf is not None:
+        # generate_pdf is deterministic — no LLM assessment, so no confidence
+        # to gate on. Reaching it at all means every upstream judgment call
+        # (personalization, compliance review) already cleared its own bar.
+        confidence = None
+        status = "completed"
+        current_agent = "pdf_generation"
+    elif comp is not None:
         # review_letter_compliance ran: a genuine LLM risk assessment exists,
         # advisory only (needs_review), same role as personalization's gate.
         confidence = comp.get("confidence")

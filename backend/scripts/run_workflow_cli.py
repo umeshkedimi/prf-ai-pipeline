@@ -87,6 +87,14 @@ def print_result(result: dict) -> None:
         aggregate["address_intelligence"] = result["address_result"]
     if result.get("recommendation_result") is not None:
         aggregate["donation_recommendation"] = result["recommendation_result"]
+    if result.get("personalization_result") is not None:
+        aggregate["campaign_personalization"] = result["personalization_result"]
+    if result.get("compliance_result") is not None:
+        aggregate["compliance"] = result["compliance_result"]
+    elif result.get("compliance_disclosures") is not None:
+        aggregate["compliance"] = result["compliance_disclosures"]
+    if result.get("pdf_result") is not None:
+        aggregate["pdf_generation"] = result["pdf_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
     print(json.dumps(aggregate, indent=2))
