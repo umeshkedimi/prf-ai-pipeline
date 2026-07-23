@@ -1,1 +1,1 @@
-"""Print Vendor MCP server — placeholder, built in Phase 6."""
+"""Print Vendor MCP server — mail-order submission and fulfillment quotes (Phase 6)."""

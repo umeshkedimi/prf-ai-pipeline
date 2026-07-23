@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     mcp_crm_url: str = "http://localhost:8100/mcp"
     mcp_address_url: str = "http://localhost:8101/mcp"
     mcp_compliance_url: str = "http://localhost:8102/mcp"
+    mcp_print_vendor_url: str = "http://localhost:8103/mcp"
 
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
