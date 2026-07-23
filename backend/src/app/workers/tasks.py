@@ -125,11 +125,31 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
 
-    # Status/confidence are driven by the *terminal* stage this run reached, not
-    # by whether any human decision happened along the way — an address-stage
-    # review is no longer terminal now that recommendation runs after it. A
-    # result carries `human_reviewed=True` when a human authoritatively signed
-    # off on that specific stage (no further confidence gating applies to it).
+    status, confidence, current_agent = _derive_terminal_status(result, settings)
+
+    async with db_session() as session:
+        run = await session.get(WorkflowRun, run_uuid)
+        run.status = status
+        run.current_agent = current_agent
+        run.result = aggregate
+        run.confidence = confidence
+        run.completed_at = datetime.now(UTC)
+        await session.commit()
+
+    log.info(
+        "workflow_run.finished",
+        workflow_run_id=workflow_run_id,
+        status=status,
+        confidence=confidence,
+    )
+
+
+def _derive_terminal_status(result: dict, settings) -> tuple[str, float | None, str]:
+    """Status/confidence are driven by the *terminal* stage this run reached, not
+    by whether any human decision happened along the way — an address-stage
+    review is no longer terminal now that recommendation runs after it. A
+    result carries `human_reviewed=True` when a human authoritatively signed
+    off on that specific stage (no further confidence gating applies to it)."""
     pdf = result.get("pdf_result")
     comp = result.get("compliance_result")
     comp_disclosures = result.get("compliance_disclosures")
@@ -137,11 +157,18 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
     rec = result.get("recommendation_result")
     addr = result.get("address_result")
     if pdf is not None:
-        # generate_pdf is deterministic — no LLM assessment, so no confidence
-        # to gate on. Reaching it at all means every upstream judgment call
-        # (personalization, compliance review) already cleared its own bar.
-        confidence = None
-        status = "completed"
+        # generate_pdf itself is deterministic — no LLM assessment of the PDF,
+        # so no confidence of its own. But it runs even when the upstream
+        # compliance review disapproved the letter (advisory, not blocking —
+        # see route_after_disclosures for the one gate that actually is
+        # blocking), so a disapproved letter that still got mailed needs to
+        # surface in the review queue rather than read as unremarkable.
+        if comp is not None and comp.get("approved") is False:
+            confidence = comp.get("confidence")
+            status = "needs_review"
+        else:
+            confidence = None
+            status = "completed"
         current_agent = "pdf_generation"
     elif comp is not None:
         # review_letter_compliance ran: a genuine LLM risk assessment exists,
@@ -202,18 +229,4 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         status = "completed" if confidence >= settings.confidence_threshold_donor_verification else "needs_review"
         current_agent = "donor_verification"
 
-    async with db_session() as session:
-        run = await session.get(WorkflowRun, run_uuid)
-        run.status = status
-        run.current_agent = current_agent
-        run.result = aggregate
-        run.confidence = confidence
-        run.completed_at = datetime.now(UTC)
-        await session.commit()
-
-    log.info(
-        "workflow_run.finished",
-        workflow_run_id=workflow_run_id,
-        status=status,
-        confidence=confidence,
-    )
+    return status, confidence, current_agent

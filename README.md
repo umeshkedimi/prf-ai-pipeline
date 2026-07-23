@@ -284,7 +284,7 @@ curl -X POST localhost:8000/api/v1/workflow/run \
   -H "Content-Type: application/json" -d '{"donor_id": "d-0001"}'
 
 curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
-# -> status: completed, current_agent: pdf_generation, confidence: null
+# -> status: needs_review, current_agent: pdf_generation, confidence: 0.85
 #    result.compliance: { approved: false, confidence: 0.85,
 #      flagged_issues: ["implies a single gift solves...", ...] }
 #    result.pdf_generation: { reference: "PRF-02BB2AD6",
