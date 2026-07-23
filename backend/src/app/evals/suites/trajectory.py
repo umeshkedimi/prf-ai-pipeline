@@ -33,8 +33,9 @@ PERSONALIZED_PIPELINE = [*FULL_PIPELINE, "personalize_letter"]
 # never runs, since there's no point judging letter wording for a letter that
 # can't legally mail regardless.
 COMPLIANCE_BLOCKED_PIPELINE = [*PERSONALIZED_PIPELINE, "gather_disclosures"]
-# Registered in-state: the letter-content review actually runs.
-COMPLIANT_PIPELINE = [*COMPLIANCE_BLOCKED_PIPELINE, "review_letter_compliance"]
+# Registered in-state: the letter-content review runs, then the PDF is
+# assembled and submitted to the print vendor — the pipeline's actual terminus.
+COMPLIANT_PIPELINE = [*COMPLIANCE_BLOCKED_PIPELINE, "review_letter_compliance", "generate_pdf"]
 
 # (external_id, terminal state, expected node path, scenario)
 # terminal state is one of: "end" (reached END) or "paused:<stage>".

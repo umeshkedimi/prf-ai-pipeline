@@ -5,7 +5,7 @@
       "description": "Semantic search over campaign knowledge, scored apart from generation",
       "runs_per_case": 3,
       "case_count": 10,
-      "duration_s": 9.69,
+      "duration_s": 12.45,
       "metrics": [
         {
           "name": "recall@1",
@@ -33,13 +33,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 322.5,
+          "value": 414.3,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 851.0,
+          "value": 933.0,
           "detail": null,
           "note": null
         }
@@ -81,7 +81,7 @@
       "description": "Does the groundedness judge still detect fabrication? (controls the scorer itself)",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 10.26,
+      "duration_s": 6.07,
       "metrics": [
         {
           "name": "judge_verdict_correct",
@@ -91,13 +91,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 683.9,
+          "value": 403.9,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 2814.0,
+          "value": 2111.0,
           "detail": null,
           "note": null
         }
@@ -112,7 +112,7 @@
       "description": "Donor eligibility classification + confidence calibration",
       "runs_per_case": 3,
       "case_count": 11,
-      "duration_s": 481.45,
+      "duration_s": 491.49,
       "metrics": [
         {
           "name": "eligible_correct",
@@ -153,7 +153,7 @@
         },
         {
           "name": "expected_calibration_error",
-          "value": 0.0976,
+          "value": 0.0973,
           "detail": {
             "buckets": [
               {
@@ -173,9 +173,9 @@
               {
                 "range": "0.9-1.0",
                 "count": 21,
-                "mean_confidence": 0.9752,
+                "mean_confidence": 0.9757,
                 "accuracy": 1.0,
-                "gap": 0.0248
+                "gap": 0.0243
               }
             ]
           },
@@ -183,13 +183,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 14588.8,
+          "value": 14893.3,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 19800.0,
+          "value": 20032.0,
           "detail": null,
           "note": null
         }
@@ -204,7 +204,7 @@
       "description": "Ask-selection rule compliance + RAG groundedness (judged by a separate model)",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 180.57,
+      "duration_s": 171.5,
       "metrics": [
         {
           "name": "ask_in_ladder",
@@ -220,7 +220,7 @@
         },
         {
           "name": "sources_valid",
-          "value": 0.8667,
+          "value": 1.0,
           "detail": null,
           "note": null
         },
@@ -244,48 +244,19 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 11455.4,
+          "value": 10861.9,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 14375.0,
+          "value": 13210.0,
           "detail": null,
           "note": null
         }
       ],
-      "flaky_case_ids": [
-        "d-0001",
-        "d-0009"
-      ],
+      "flaky_case_ids": [],
       "failures": [
-        {
-          "case_id": "d-0001",
-          "scorer": "sources_valid",
-          "mean_score": 0.667,
-          "run_scores": [
-            1.0,
-            1.0,
-            0.0
-          ],
-          "expected": {
-            "scenario": "active donor, single clean gift"
-          }
-        },
-        {
-          "case_id": "d-0009",
-          "scorer": "sources_valid",
-          "mean_score": 0.667,
-          "run_scores": [
-            1.0,
-            1.0,
-            0.0
-          ],
-          "expected": {
-            "scenario": "single modest gift"
-          }
-        },
         {
           "case_id": "d-0006",
           "scorer": "outlier_respected",
@@ -308,7 +279,7 @@
       "description": "End-to-end routing: terminal state and node path across the whole graph",
       "runs_per_case": 3,
       "case_count": 12,
-      "duration_s": 1159.32,
+      "duration_s": 1127.39,
       "metrics": [
         {
           "name": "terminal_state_correct",
@@ -330,13 +301,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 32202.8,
+          "value": 31316.0,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 56178.0,
+          "value": 52565.0,
           "detail": null,
           "note": null
         }
@@ -373,7 +344,7 @@
       "description": "Letter-draft rule compliance (tone/segment fidelity, ask reference) + RAG groundedness",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 180.66,
+      "duration_s": 189.47,
       "metrics": [
         {
           "name": "tone_and_segment_unchanged",
@@ -383,7 +354,7 @@
         },
         {
           "name": "sources_valid",
-          "value": 0.8667,
+          "value": 0.8,
           "detail": null,
           "note": null
         },
@@ -401,26 +372,27 @@
         },
         {
           "name": "groundedness",
-          "value": 0.8667,
+          "value": 0.9333,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_mean",
-          "value": 11606.2,
+          "value": 12159.4,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 14879.0,
+          "value": 17963.0,
           "detail": null,
           "note": null
         }
       ],
       "flaky_case_ids": [
         "d-0001",
-        "d-0006",
+        "d-0008",
+        "d-0009",
         "d-0011"
       ],
       "failures": [
@@ -429,12 +401,25 @@
           "scorer": "sources_valid",
           "mean_score": 0.667,
           "run_scores": [
+            1.0,
+            1.0,
+            0.0
+          ],
+          "expected": {
+            "scenario": "active donor, single clean gift"
+          }
+        },
+        {
+          "case_id": "d-0008",
+          "scorer": "sources_valid",
+          "mean_score": 0.667,
+          "run_scores": [
             0.0,
             1.0,
             1.0
           ],
           "expected": {
-            "scenario": "active donor, single clean gift"
+            "scenario": "small-dollar recurring donor"
           }
         },
         {
@@ -451,7 +436,7 @@
           }
         },
         {
-          "case_id": "d-0011",
+          "case_id": "d-0009",
           "scorer": "references_recommended_ask",
           "mean_score": 0.333,
           "run_scores": [
@@ -460,24 +445,11 @@
             0.0
           ],
           "expected": {
-            "scenario": "major donor \u2014 personal, relationship-based tone"
+            "scenario": "single modest gift"
           }
         },
         {
-          "case_id": "d-0001",
-          "scorer": "groundedness",
-          "mean_score": 0.667,
-          "run_scores": [
-            1.0,
-            1.0,
-            0.0
-          ],
-          "expected": {
-            "scenario": "active donor, single clean gift"
-          }
-        },
-        {
-          "case_id": "d-0006",
+          "case_id": "d-0011",
           "scorer": "groundedness",
           "mean_score": 0.667,
           "run_scores": [
@@ -486,7 +458,7 @@
             1.0
           ],
           "expected": {
-            "scenario": "active donor with a multi-gift history"
+            "scenario": "major donor \u2014 personal, relationship-based tone"
           }
         }
       ],
@@ -498,7 +470,7 @@
       "description": "Disclosure-lookup correctness (deterministic) + letter-content risk review",
       "runs_per_case": 3,
       "case_count": 4,
-      "duration_s": 39.88,
+      "duration_s": 39.09,
       "metrics": [
         {
           "name": "tax_statement_always_present",
@@ -526,13 +498,68 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 3322.5,
+          "value": 3257.1,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 6880.0,
+          "value": 7035.0,
+          "detail": null,
+          "note": null
+        }
+      ],
+      "flaky_case_ids": [],
+      "failures": [],
+      "errors": [],
+      "scorer_errors": []
+    },
+    "pdf_generation": {
+      "suite": "pdf_generation",
+      "description": "Deterministic PDF assembly (file written, disclosures pass through) + vendor order correctness",
+      "runs_per_case": 3,
+      "case_count": 3,
+      "duration_s": 0.62,
+      "metrics": [
+        {
+          "name": "pdf_file_exists",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "reference_matches_deterministic_build",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "disclosures_pass_through_unchanged",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "postage_class_matches_page_count",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "vendor_confirmation_present",
+          "value": 1.0,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_mean",
+          "value": 68.6,
+          "detail": null,
+          "note": null
+        },
+        {
+          "name": "latency_ms_max",
+          "value": 89.0,
           "detail": null,
           "note": null
         }
@@ -543,8 +570,8 @@
       "scorer_errors": []
     }
   },
-  "generated_at": "2026-07-22T17:14:00.047226+00:00",
-  "git_sha": "daa5ea217e1694d54eb1691e0b07d821ea3da5a5",
+  "generated_at": "2026-07-23T04:21:02.644485+00:00",
+  "git_sha": "94f7239517aab3fa8bc7e11577c7a3a8d31e9e1f",
   "llm_model": "qwen2.5:14b",
   "judge_model": "llama3.1:8b"
 }

@@ -7,6 +7,7 @@ from app.evals.suites import (
     campaign_personalization,
     compliance,
     judge_control,
+    pdf_generation,
     recommendation,
     retrieval,
     trajectory,
@@ -25,6 +26,7 @@ ALL_SUITES: dict[str, EvalSuite] = {
         recommendation.SUITE,
         campaign_personalization.SUITE,
         compliance.SUITE,
+        pdf_generation.SUITE,
         trajectory.SUITE,
     )
 }
