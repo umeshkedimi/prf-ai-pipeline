@@ -60,12 +60,15 @@ async def test_crash_after_gather_context_then_resume_does_not_rerun_completed_n
     assert resume_proc.returncode == 0, resume_proc.stderr
     result = json.loads(resume_proc.stdout)
     assert result["donor_verification"]["eligible"] is True
+    assert result["pdf_generation"] is not None
 
     # the operative claim: fetch_core_data and gather_context ran exactly once
-    # each, before the crash — resume continued on through Address Intelligence
-    # and Donation Recommendation (d-0001 is eligible with a clean address and a
-    # modest ask, so it auto-completes with no interrupt) without re-running
-    # either of the pre-crash steps.
+    # each, before the crash — resume continued all the way through Address
+    # Intelligence, Donation Recommendation, Campaign Personalization,
+    # Compliance, and PDF Generation (d-0001 is eligible with a clean,
+    # deliverable address, a modest ask, and is registered to solicit, so it
+    # auto-completes with no interrupt) without re-running either of the
+    # pre-crash steps.
     assert await _audit_steps(workflow_run_id) == [
         "fetch_core_data",
         "gather_context",
@@ -74,4 +77,8 @@ async def test_crash_after_gather_context_then_resume_does_not_rerun_completed_n
         "assess_and_normalize",
         "compute_rfm",
         "recommend_ask",
+        "personalize_letter",
+        "gather_disclosures",
+        "review_letter_compliance",
+        "generate_pdf",
     ]

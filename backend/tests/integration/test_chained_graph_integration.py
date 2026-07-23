@@ -68,10 +68,16 @@ async def test_eligible_clean_donor_completes_with_no_interrupt():
     assert "__interrupt__" not in result
     assert result["verification_result"]["eligible"] is True
     assert result["address_result"]["confidence"] > 0.85
-    # a clean, deliverable address now flows on into the recommendation
+    # a clean, deliverable address now flows all the way through the rest of
+    # the chain: recommendation, personalization, compliance, PDF generation.
+    # d-0001 is registered to solicit, so review_letter_compliance runs rather
+    # than pausing a second time at gather_disclosures.
     rec = result["recommendation_result"]
     assert rec["recommended_ask"] in rec["ask_ladder"]
     assert rec["recommended_ask"] < 1000.0  # modest donor — no major-gift pause
+    assert result["personalization_result"] is not None
+    assert result["compliance_result"] is not None
+    assert result["pdf_result"] is not None
     steps = await _audit_steps(workflow_run_id)
     assert steps == [
         "fetch_core_data",
@@ -81,11 +87,21 @@ async def test_eligible_clean_donor_completes_with_no_interrupt():
         "assess_and_normalize",
         "compute_rfm",
         "recommend_ask",
+        "personalize_letter",
+        "gather_disclosures",
+        "review_letter_compliance",
+        "generate_pdf",
     ]
 
 
 async def test_low_confidence_address_pauses_then_resumes_cleanly():
-    donor_id, workflow_run_id = await _create_run("d-0010")  # vacant, no forwarding
+    """d-0009 is moved, with a forwarding address found at only moderate
+    confidence — that 0.6 is a deterministic fixture value
+    (mcp_servers/address/fixtures.py), not something the LLM invents, since
+    assess_and_normalize's prompt hands it the number directly. That's what
+    makes this donor a reliable pause case regardless of which model is
+    behind LLM_PROVIDER, unlike d-0010 below."""
+    donor_id, workflow_run_id = await _create_run("d-0009")  # moved, uncertain forwarding
     config = {"configurable": {"thread_id": workflow_run_id}}
 
     async with build_graph() as graph:
@@ -99,7 +115,10 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
         payload = interrupted["__interrupt__"][0].value
         assert payload["reason"] == "address_confidence_below_threshold"
         assert payload["stage"] == "address"
-        assert payload["under_review"]["deliverable"] is False
+        # `moved` itself is an LLM judgment on top of the deterministic
+        # verify_address flag, not guaranteed stable across models — the
+        # confidence gate is the actual, reliable trigger being tested here.
+        assert payload["under_review"]["confidence"] < 0.80
 
         steps_paused = await _audit_steps(workflow_run_id)
         assert steps_paused == [
@@ -110,7 +129,12 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
             "assess_and_normalize",
         ]
 
-        decision = {"action": "reject", "updated_address": None, "reviewer": "integration-test", "notes": "confirmed vacant"}
+        decision = {
+            "action": "reject",
+            "updated_address": None,
+            "reviewer": "integration-test",
+            "notes": "could not confirm the forwarding address",
+        }
         resumed = await graph.ainvoke(Command(resume=decision), config=config, durability="sync")
 
     assert "__interrupt__" not in resumed
@@ -131,6 +155,35 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
         "human_review",
     ]
     assert resumed.get("recommendation_result") is None
+
+
+async def test_confidently_vacant_address_ends_without_pausing_or_mailing():
+    """d-0010 is vacant with no forwarding address to anchor a number to, so
+    (unlike d-0009 above) the model has nothing but an unambiguous "vacant,
+    nothing found" result to reason over — it reports high confidence rather
+    than hedging, which is the correct call, not noise: route_after_address
+    is explicitly designed so a confident-but-undeliverable address ends the
+    run without a human pause, since there's nothing uncertain to review."""
+    donor_id, workflow_run_id = await _create_run("d-0010")  # vacant, no forwarding
+
+    async with build_graph() as graph:
+        result = await graph.ainvoke(
+            {"workflow_run_id": workflow_run_id, "donor_id": donor_id, "campaign_id": None},
+            config={"configurable": {"thread_id": workflow_run_id}},
+            durability="sync",
+        )
+
+    assert "__interrupt__" not in result
+    assert result["address_result"]["deliverable"] is False
+    assert result["address_result"]["confidence"] >= 0.80  # CONFIDENCE_THRESHOLD_ADDRESS_INTELLIGENCE
+    assert result.get("recommendation_result") is None
+    assert await _audit_steps(workflow_run_id) == [
+        "fetch_core_data",
+        "gather_context",
+        "synthesize_verdict",
+        "verify_address",
+        "assess_and_normalize",
+    ]
 
 
 async def test_major_gift_ask_pauses_for_recommendation_review_then_resumes():
@@ -178,10 +231,28 @@ async def test_major_gift_ask_pauses_for_recommendation_review_then_resumes():
     assert rec["recommended_ask"] == 500.0  # the human's number, not the model's
     assert rec["human_reviewed"] is True
     assert resumed["human_review_decision"]["action"] == "modify"
+    # the (now positive) ask continues on into personalization, compliance,
+    # and PDF generation — recommendation is no longer terminal since Phase 4.
+    # d-0011 is registered to solicit, so it never pauses a second time.
+    assert resumed["personalization_result"] is not None
+    assert resumed["compliance_result"] is not None
+    assert resumed["pdf_result"] is not None
 
     steps_final = await _audit_steps(workflow_run_id)
-    assert steps_final[-1] == "human_review"
-    assert len(steps_final) == 8  # nothing re-ran
+    assert steps_final == [
+        "fetch_core_data",
+        "gather_context",
+        "synthesize_verdict",
+        "verify_address",
+        "assess_and_normalize",
+        "compute_rfm",
+        "recommend_ask",
+        "human_review",
+        "personalize_letter",
+        "gather_disclosures",
+        "review_letter_compliance",
+        "generate_pdf",
+    ]
 
 
 async def test_anomalous_donation_does_not_inflate_the_ask():
