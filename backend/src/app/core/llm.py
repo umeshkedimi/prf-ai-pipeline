@@ -39,6 +39,8 @@ def get_llm(
         # above anything this pipeline's structured outputs need, so it only
         # bites a genuinely runaway generation.
         model_kwargs.setdefault("num_predict", 2048)
+        if settings.ollama_base_url:
+            model_kwargs.setdefault("base_url", settings.ollama_base_url)
     return init_chat_model(
         model=model or settings.llm_model,
         model_provider=resolved_provider,

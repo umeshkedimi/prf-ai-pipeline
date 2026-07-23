@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     llm_model: str = "gemini-2.5-flash"
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
+    # ChatOllama defaults to http://localhost:11434, which only resolves inside
+    # the dockerized api/celery-worker containers themselves, not the host
+    # machine running the actual Ollama process. Set to
+    # http://host.docker.internal:11434 in docker-compose.yml; left unset for
+    # bare `uv run`, where the real localhost is correct as-is.
+    ollama_base_url: str | None = None
 
     # LLM-as-judge model for the evaluation framework. Deliberately a different
     # (and cheaper) model than the one under evaluation: a model grading its own
