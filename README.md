@@ -51,7 +51,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | **4** ✅ done | Campaign Personalization agent (deterministic tone lookup + RAG-grounded letter draft), chained after Donation Recommendation |
 | **5** ✅ done | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP, chained after Campaign Personalization; a third review trigger on unregistered-state solicitation |
 | **6** ✅ done | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP, chained after Compliance — no LLM call, purely mechanical assembly and a mocked vendor order |
-| 7 | Review queue + full Human Review dashboard workflows, multi-agent graph assembly |
+| **7** 🟡 in progress | Review queue (`GET /workflow/reviews`, listing `awaiting_review`/`needs_review` runs) done, including routing a disapproved compliance review (`approved: false`) to `needs_review` instead of letting it read as a routine completion. Still open: full Human Review dashboard workflows, multi-agent graph assembly |
 | 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
