@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -48,6 +49,28 @@ async def run_workflow(
 
     run_workflow_task.delay(str(run.id))
     return run
+
+
+@router.get("/workflow/reviews", response_model=list[WorkflowRunRead])
+async def list_reviews(
+    status: Literal["awaiting_review", "needs_review"] | None = Query(
+        None, description="Restrict to one queue; omit for both"
+    ),
+    session: AsyncSession = Depends(get_db),
+) -> list[WorkflowRun]:
+    """Everything a human has reason to look at: `awaiting_review` runs are
+    genuinely paused on a LangGraph interrupt() and block on a decision;
+    `needs_review` runs already reached END but flagged a low-confidence or
+    disapproved outcome for an eventual glance. Declared ahead of
+    GET /workflow/{workflow_run_id} so "reviews" doesn't get routed there and
+    fail UUID conversion."""
+    statuses = [status] if status else ["awaiting_review", "needs_review"]
+    result = await session.execute(
+        select(WorkflowRun)
+        .where(WorkflowRun.status.in_(statuses))
+        .order_by(WorkflowRun.created_at)
+    )
+    return list(result.scalars().all())
 
 
 @router.get("/workflow/{workflow_run_id}", response_model=WorkflowRunRead)

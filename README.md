@@ -295,8 +295,31 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
 #    advisory (same role as every other stage's confidence threshold), not a
 #    blocking gate; the deterministic registration check in gather_disclosures
 #    is the only thing in Compliance that actually stops a letter from
-#    reaching print. A real deployment would still route `approved: false`
-#    into a review queue via `needs_review` (Phase 7) before mailing.
+#    reaching print. approved: false now routes to status: needs_review (with
+#    the compliance confidence carried through, rather than the null a clean
+#    pdf_generation terminus reports) instead of reading as an unremarkable
+#    completion, so it surfaces in the review queue below before mailing.
+```
+
+### Demo: the review queue (Phase 7)
+
+`GET /workflow/reviews` is the only way to discover work awaiting a human —
+without it, a reviewer has to already know a `workflow_run_id` to poll. It
+lists every run that hasn't been silently completed: `awaiting_review` (the
+graph is genuinely paused on an interrupt, one of the three stages above) and
+`needs_review` (advisory — the graph reached `END`, but a low-confidence or
+disapproved outcome is worth a glance), sorted oldest first.
+
+```bash
+curl "localhost:8000/api/v1/workflow/reviews"
+# -> [ { id: "...", status: "needs_review", current_agent: "pdf_generation",
+#        confidence: 0.85, result: { compliance: { approved: false, ... }, ... } },
+#      { id: "...", status: "awaiting_review", current_agent: "human_review",
+#        pending_review: { stage: "recommendation", ... } },
+#      ... ]
+
+curl "localhost:8000/api/v1/workflow/reviews?status=awaiting_review"
+# -> only the genuinely blocked runs — filter to one queue at a time
 ```
 
 `donor_id` accepts either the CRM's `external_id` (e.g. `"d-0009"`, as seeded) or our internal UUID directly.
