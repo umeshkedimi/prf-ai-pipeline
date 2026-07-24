@@ -31,6 +31,9 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
   return (
     <div>
       <button onClick={onBack}>← Back to queue</button>
+      <button onClick={load} disabled={loading} style={{ marginLeft: 8 }}>
+        {loading ? "Refreshing…" : "Refresh"}
+      </button>
       <h2 style={{ marginTop: 12 }}>
         Run {run.id} <StatusBadge status={run.status} />
       </h2>
