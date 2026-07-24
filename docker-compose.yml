@@ -100,6 +100,11 @@ services:
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      # generate_pdf writes to <repo>/storage/letters (see render.py's
+      # LETTER_STORAGE_DIR); without this it only ever exists inside the
+      # container and vanishes with it.
+      - ./backend/storage:/app/storage
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
