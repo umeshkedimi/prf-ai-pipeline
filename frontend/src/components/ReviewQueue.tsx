@@ -50,6 +50,7 @@ export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
               <th>Donor</th>
+              <th>Donor ID</th>
               <th>Campaign</th>
               <th>Status</th>
               <th>Stage</th>
@@ -65,6 +66,7 @@ export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
                 style={{ cursor: "pointer", borderBottom: "1px solid #eee" }}
               >
                 <td>{row.donor_name}</td>
+                <td>{row.donor_external_id ?? row.donor_id}</td>
                 <td>{row.campaign_name ?? "—"}</td>
                 <td>
                   <StatusBadge status={row.status} />

@@ -93,6 +93,7 @@ async def list_reviews(
             id=run.id,
             donor_id=run.donor_id,
             donor_name=f"{donor.first_name} {donor.last_name}",
+            donor_external_id=donor.external_id,
             campaign_id=run.campaign_id,
             campaign_name=campaign.name if campaign else None,
             status=run.status,
@@ -116,6 +117,8 @@ async def get_workflow(
         raise HTTPException(status_code=404, detail="workflow run not found")
 
     response = WorkflowRunRead.model_validate(run)
+    donor = await session.get(Donor, run.donor_id)
+    response.donor_external_id = donor.external_id if donor else None
     review_rows = (
         (
             await session.execute(

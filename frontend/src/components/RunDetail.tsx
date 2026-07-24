@@ -43,8 +43,8 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
         Run {run.id} <StatusBadge status={run.status} />
       </h2>
       <p>
-        Donor: {run.donor_id} · Current agent: {run.current_agent ?? "—"} · Confidence:{" "}
-        {run.confidence ?? "—"}
+        Donor: {run.donor_external_id ?? run.donor_id} · Current agent: {run.current_agent ?? "—"} ·
+        Confidence: {run.confidence ?? "—"}
       </p>
       <p>
         Created {new Date(run.created_at).toLocaleString()}

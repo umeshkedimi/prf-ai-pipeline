@@ -7,6 +7,7 @@ export interface WorkflowReviewSummary {
   id: string;
   donor_id: string;
   donor_name: string;
+  donor_external_id: string | null;
   campaign_id: string | null;
   campaign_name: string | null;
   status: string;
@@ -46,6 +47,7 @@ export interface AuditLogEntry {
 export interface WorkflowRunRead {
   id: string;
   donor_id: string;
+  donor_external_id: string | null;
   campaign_id: string | null;
   status: string;
   current_agent: string | null;

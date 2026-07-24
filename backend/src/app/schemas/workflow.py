@@ -73,6 +73,7 @@ class WorkflowRunRead(BaseModel):
 
     id: uuid.UUID
     donor_id: uuid.UUID
+    donor_external_id: str | None = None
     campaign_id: uuid.UUID | None = None
     status: str
     current_agent: str | None = None
@@ -97,6 +98,7 @@ class WorkflowReviewSummary(BaseModel):
     id: uuid.UUID
     donor_id: uuid.UUID
     donor_name: str
+    donor_external_id: str | None = None
     campaign_id: uuid.UUID | None = None
     campaign_name: str | None = None
     status: str
