@@ -145,6 +145,11 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+    volumes:
+      # Same mount as celery-worker (see its comment) -- the API needs to
+      # read a letter PDF to serve it via GET /workflow/{id}/pdf; it never
+      # writes here itself.
+      - ./backend/storage:/app/storage
     ports:
       - "8000:8000"
     extra_hosts:

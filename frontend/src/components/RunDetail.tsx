@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getWorkflowRun, submitReview } from "../api";
+import { getWorkflowRun, pdfUrl, submitReview } from "../api";
 import type { WorkflowRunRead } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { ReviewDecisionForm } from "./ReviewDecisionForm";
@@ -28,6 +28,10 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
   if (error) return <p style={{ color: "#b91c1c" }}>{error}</p>;
   if (!run) return null;
 
+  const pdfResult = run.result?.pdf_generation as
+    | { reference: string; tracking_number: string; postage_class: string }
+    | undefined;
+
   return (
     <div>
       <button onClick={onBack}>← Back to queue</button>
@@ -46,6 +50,16 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
         {run.completed_at && ` · Completed ${new Date(run.completed_at).toLocaleString()}`}
       </p>
       {run.error && <p style={{ color: "#b91c1c" }}>Error: {run.error}</p>}
+
+      {pdfResult && (
+        <p>
+          Letter generated — ref <strong>{pdfResult.reference}</strong>, tracking{" "}
+          {pdfResult.tracking_number} ({pdfResult.postage_class}).{" "}
+          <a href={pdfUrl(run.id)} target="_blank" rel="noreferrer">
+            View PDF
+          </a>
+        </p>
+      )}
 
       {run.status === "awaiting_review" && run.pending_review && (
         <section style={{ border: "1px solid #ccc", borderRadius: 6, padding: 12, margin: "16px 0" }}>

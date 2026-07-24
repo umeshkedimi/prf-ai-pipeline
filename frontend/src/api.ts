@@ -48,3 +48,7 @@ export function startWorkflowRun(payload: WorkflowRunCreate): Promise<WorkflowRu
     body: JSON.stringify(payload),
   });
 }
+
+export function pdfUrl(id: string): string {
+  return `${BASE_URL}/workflow/${id}/pdf`;
+}

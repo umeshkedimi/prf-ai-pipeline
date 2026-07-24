@@ -1,7 +1,9 @@
 import uuid
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -164,3 +166,23 @@ async def submit_review(
 
     resume_workflow_after_review.delay(str(run.id), payload.model_dump())
     return run
+
+
+@router.get("/workflow/{workflow_run_id}/pdf")
+async def get_workflow_pdf(
+    workflow_run_id: uuid.UUID, session: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    """Serves the generated letter. generate_pdf writes to disk (see
+    render.py's LETTER_STORAGE_DIR) and only records the path in
+    pdf_result — there was previously no way to retrieve the file itself
+    over HTTP, so a dashboard had nowhere to link to."""
+    run = await session.get(WorkflowRun, workflow_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="workflow run not found")
+    pdf_result = (run.result or {}).get("pdf_generation")
+    if pdf_result is None:
+        raise HTTPException(status_code=404, detail="no PDF generated for this run")
+    pdf_path = Path(pdf_result["pdf_path"])
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+    return FileResponse(pdf_path, media_type="application/pdf", filename=f"{workflow_run_id}.pdf")
