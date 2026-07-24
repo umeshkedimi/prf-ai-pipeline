@@ -98,20 +98,17 @@ def route_after_disclosures(state: PipelineState) -> str:
     return "review_letter_compliance"
 
 
-def _build_graph() -> StateGraph:
-    graph = StateGraph(PipelineState)
+def _add_verification_unit(graph: StateGraph) -> None:
+    """Donor Verification + Address Intelligence: confirms the donor record and
+    resolves a mailable address before any money math runs. Both stages gate on
+    deterministic checks (eligibility, address confidence) rather than LLM
+    judgment, so nothing downstream of this unit can be reached for a donor who
+    fails either one."""
     graph.add_node("fetch_core_data", fetch_core_data)
     graph.add_node("gather_context", gather_context)
     graph.add_node("synthesize_verdict", synthesize_verdict)
     graph.add_node("verify_address", verify_address)
     graph.add_node("assess_and_normalize", assess_and_normalize)
-    graph.add_node("compute_rfm", compute_rfm)
-    graph.add_node("recommend_ask", recommend_ask)
-    graph.add_node("human_review", human_review)
-    graph.add_node("personalize_letter", personalize_letter)
-    graph.add_node("gather_disclosures", gather_disclosures)
-    graph.add_node("review_letter_compliance", review_letter_compliance)
-    graph.add_node("generate_pdf", generate_pdf)
 
     graph.add_edge(START, "fetch_core_data")
     graph.add_edge("fetch_core_data", "gather_context")
@@ -125,12 +122,53 @@ def _build_graph() -> StateGraph:
         route_after_address,
         {"human_review": "human_review", "compute_rfm": "compute_rfm", END: END},
     )
+
+
+def _add_fulfillment_unit(graph: StateGraph) -> None:
+    """Donation Recommendation through PDF Generation: turns a verified,
+    deliverable donor into a priced ask, a personalized letter, a compliance
+    check, and a print-ready PDF. Everything here consumes the verification
+    unit's output; nothing here feeds back into it."""
+    graph.add_node("compute_rfm", compute_rfm)
+    graph.add_node("recommend_ask", recommend_ask)
+    graph.add_node("personalize_letter", personalize_letter)
+    graph.add_node("gather_disclosures", gather_disclosures)
+    graph.add_node("review_letter_compliance", review_letter_compliance)
+    graph.add_node("generate_pdf", generate_pdf)
+
     graph.add_edge("compute_rfm", "recommend_ask")
     graph.add_conditional_edges(
         "recommend_ask",
         route_after_recommendation,
         {"human_review": "human_review", "personalize_letter": "personalize_letter"},
     )
+    graph.add_edge("personalize_letter", "gather_disclosures")
+    graph.add_conditional_edges(
+        "gather_disclosures",
+        route_after_disclosures,
+        {"human_review": "human_review", "review_letter_compliance": "review_letter_compliance"},
+    )
+    graph.add_edge("review_letter_compliance", "generate_pdf")
+    graph.add_edge("generate_pdf", END)
+
+
+def _build_graph() -> StateGraph:
+    """Assembles the pipeline from two node-grouping units plus the shared
+    human_review gate that connects them.
+
+    This is a code-organization split, not a LangGraph nested-subgraph split:
+    both units add directly onto the same StateGraph rather than compiling as
+    independent subgraph nodes. A real nested subgraph can only be entered at
+    its own START, but route_after_human_review resumes into whichever
+    mid-pipeline node the pause happened at (compute_rfm, personalize_letter,
+    or review_letter_compliance) — resuming into the *middle* of a unit, which
+    nested subgraphs don't support. Keeping one flat graph preserves that
+    resume behavior exactly; only the code that builds it is split."""
+    graph = StateGraph(PipelineState)
+    _add_verification_unit(graph)
+    _add_fulfillment_unit(graph)
+
+    graph.add_node("human_review", human_review)
     graph.add_conditional_edges(
         "human_review",
         route_after_human_review,
@@ -141,14 +179,6 @@ def _build_graph() -> StateGraph:
             END: END,
         },
     )
-    graph.add_edge("personalize_letter", "gather_disclosures")
-    graph.add_conditional_edges(
-        "gather_disclosures",
-        route_after_disclosures,
-        {"human_review": "human_review", "review_letter_compliance": "review_letter_compliance"},
-    )
-    graph.add_edge("review_letter_compliance", "generate_pdf")
-    graph.add_edge("generate_pdf", END)
     return graph
 
 
