@@ -52,7 +52,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | **5** ✅ done | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP, chained after Campaign Personalization; a third review trigger on unregistered-state solicitation |
 | **6** ✅ done | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP, chained after Compliance — no LLM call, purely mechanical assembly and a mocked vendor order |
 | **7** ✅ done | Review queue (`GET /workflow/reviews`, listing `awaiting_review`/`needs_review` runs with donor/campaign names and pagination) + per-run decision history (`review_history` on `GET /workflow/{id}`, derived from the audit trail — a run can pause up to three times) + routing a disapproved compliance review (`approved: false`) to `needs_review` + `graph/builder.py` split into named verification/fulfillment node units |
-| 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening |
+| **8** 🟡 in progress | **8a** ✅ React review dashboard (`frontend/`) — queue view, run detail with full audit trail, decision submission, review history. **8b** OpenTelemetry + Prometheus, **8c** production hardening — not started |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
 
@@ -180,6 +180,36 @@ docker compose up -d --build mcp-crm mcp-address mcp-compliance mcp-print-vendor
 ```
 
 `ingest_knowledge.py` is idempotent — re-run it after editing anything in `backend/knowledge/` and it refreshes those documents in place.
+
+### Frontend (review dashboard)
+
+A minimal Vite + React + TypeScript app that consumes the Phase 7 review-queue
+API — no framework beyond React itself, no client-side router (the whole app
+is a queue view and a run-detail view, toggled by component state), no CSS
+library. It's a UI for reviewing paused/flagged runs and submitting
+decisions, not a general admin panel.
+
+```bash
+cd frontend
+cp .env.example .env   # VITE_API_BASE_URL, defaults to localhost:8000/api/v1
+npm install
+npm run dev            # http://localhost:5173
+```
+
+The API's CORS middleware allow-lists `http://localhost:5173` by default
+(`CORS_ALLOWED_ORIGINS` in `.env` at the repo root) — no extra setup needed
+for local dev against `docker compose up -d api`.
+
+What it does: lists `GET /workflow/reviews` with donor/campaign names and
+pagination; opens a run via `GET /workflow/{id}` (and its full audit trail on
+demand via `?verbose=true`); submits decisions via `POST
+/workflow/{id}/review`, with the form's fields (`updated_address` /
+`updated_ask_amount`) conditional on which of the three stages paused; shows
+`review_history` (every past decision on that run, not just the one that
+last resolved it) and a "start a new run" form for `POST /workflow/run`. A
+submitted decision resumes the graph asynchronously via Celery, same as the
+API always has — the UI says so and expects a manual refresh rather than
+faking a synchronous result.
 
 ### Demo: the full human-in-the-loop loop via the API
 
