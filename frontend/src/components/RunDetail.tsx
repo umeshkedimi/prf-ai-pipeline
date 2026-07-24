@@ -73,9 +73,19 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
           }}
         >
           <strong>Advisory only — nothing to approve or reject here.</strong> The pipeline already
-          reached a final state (nothing is paused); a low-confidence or disapproved outcome at{" "}
-          <strong>{run.current_agent}</strong> just flagged it for a human to glance at. Check the
-          results below for what triggered it.
+          reached a final state (nothing is paused).{" "}
+          {run.current_agent === "pdf_generation" ? (
+            <>
+              PDF generation itself has no confidence of its own — it ran and mailed the letter
+              anyway (advisory, not blocking), but the <strong>Compliance</strong> review disapproved
+              the letter's wording. See the Compliance card below for what it flagged.
+            </>
+          ) : (
+            <>
+              A low-confidence outcome at <strong>{run.current_agent}</strong> flagged it for a human
+              to glance at. Check the results below for what triggered it.
+            </>
+          )}
         </p>
       )}
 
