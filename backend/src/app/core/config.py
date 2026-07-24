@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     mcp_compliance_url: str = "http://localhost:8102/mcp"
     mcp_print_vendor_url: str = "http://localhost:8103/mcp"
 
+    # Comma-separated. Real allowlisting (env-driven per deployment, not a
+    # wildcard) belongs here rather than as a Phase 8 hardening afterthought —
+    # this is what lets the React dashboard's Vite dev server call the API at
+    # all, so it has to exist the moment the dashboard does.
+    cors_allowed_origins: str = "http://localhost:5173"
+
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
     confidence_threshold_address_intelligence: float = 0.80
