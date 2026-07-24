@@ -3,6 +3,7 @@ import { getWorkflowRun, pdfUrl, submitReview } from "../api";
 import type { WorkflowRunRead } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { ReviewDecisionForm } from "./ReviewDecisionForm";
+import { ResultCard } from "./ResultCard";
 
 export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [run, setRun] = useState<WorkflowRunRead | null>(null);
@@ -59,6 +60,24 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
             View PDF
           </a>
         </p>
+      )}
+
+      {run.status === "needs_review" && (
+        <p style={{ background: "#fffbeb", border: "1px solid #b45309", borderRadius: 6, padding: 12 }}>
+          <strong>Advisory only — nothing to approve or reject here.</strong> The pipeline already
+          reached a final state (nothing is paused); a low-confidence or disapproved outcome at{" "}
+          <strong>{run.current_agent}</strong> just flagged it for a human to glance at. Check the
+          results below for what triggered it.
+        </p>
+      )}
+
+      {run.result && Object.keys(run.result).length > 0 && (
+        <section style={{ display: "flex", flexDirection: "column", gap: 8, margin: "16px 0" }}>
+          <h3>Results</h3>
+          {Object.entries(run.result).map(([key, data]) => (
+            <ResultCard key={key} stepKey={key} data={data as Record<string, unknown>} />
+          ))}
+        </section>
       )}
 
       {run.status === "awaiting_review" && run.pending_review && (
