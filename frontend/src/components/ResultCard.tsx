@@ -23,7 +23,15 @@ export function ResultCard({ stepKey, data }: { stepKey: string; data: Record<st
       )}
       <details>
         <summary style={{ cursor: "pointer", color: "#57534e" }}>Raw output</summary>
-        <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f4", padding: 8 }}>
+        <pre
+          style={{
+            whiteSpace: "pre-wrap",
+            background: "var(--code-bg)",
+            color: "var(--code-text)",
+            padding: 8,
+            borderRadius: 4,
+          }}
+        >
           {JSON.stringify(data, null, 2)}
         </pre>
       </details>

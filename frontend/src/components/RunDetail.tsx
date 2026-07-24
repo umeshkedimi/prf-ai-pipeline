@@ -63,7 +63,15 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
       )}
 
       {run.status === "needs_review" && (
-        <p style={{ background: "#fffbeb", border: "1px solid #b45309", borderRadius: 6, padding: 12 }}>
+        <p
+          style={{
+            background: "var(--warn-bg)",
+            color: "var(--warn-text)",
+            border: "1px solid var(--warn-border)",
+            borderRadius: 6,
+            padding: 12,
+          }}
+        >
           <strong>Advisory only — nothing to approve or reject here.</strong> The pipeline already
           reached a final state (nothing is paused); a low-confidence or disapproved outcome at{" "}
           <strong>{run.current_agent}</strong> just flagged it for a human to glance at. Check the
@@ -83,7 +91,15 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
       {run.status === "awaiting_review" && run.pending_review && (
         <section style={{ border: "1px solid #ccc", borderRadius: 6, padding: 12, margin: "16px 0" }}>
           <h3>Blocked on: {run.pending_review.reason}</h3>
-          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f4", padding: 8 }}>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              background: "var(--code-bg)",
+              color: "var(--code-text)",
+              padding: 8,
+              borderRadius: 4,
+            }}
+          >
             {JSON.stringify(run.pending_review.under_review, null, 2)}
           </pre>
           <ReviewDecisionForm
