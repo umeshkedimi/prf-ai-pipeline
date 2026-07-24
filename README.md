@@ -51,7 +51,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | **4** ✅ done | Campaign Personalization agent (deterministic tone lookup + RAG-grounded letter draft), chained after Donation Recommendation |
 | **5** ✅ done | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP, chained after Campaign Personalization; a third review trigger on unregistered-state solicitation |
 | **6** ✅ done | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP, chained after Compliance — no LLM call, purely mechanical assembly and a mocked vendor order |
-| **7** 🟡 in progress | Review queue (`GET /workflow/reviews`, listing `awaiting_review`/`needs_review` runs) done, including routing a disapproved compliance review (`approved: false`) to `needs_review` instead of letting it read as a routine completion. Still open: full Human Review dashboard workflows, multi-agent graph assembly |
+| **7** ✅ done | Review queue (`GET /workflow/reviews`, listing `awaiting_review`/`needs_review` runs with donor/campaign names and pagination) + per-run decision history (`review_history` on `GET /workflow/{id}`, derived from the audit trail — a run can pause up to three times) + routing a disapproved compliance review (`approved: false`) to `needs_review` + `graph/builder.py` split into named verification/fulfillment node units |
 | 8 | React review dashboard, OpenTelemetry + Prometheus, production hardening |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
@@ -312,17 +312,23 @@ disapproved outcome is worth a glance), sorted oldest first.
 
 ```bash
 curl "localhost:8000/api/v1/workflow/reviews"
-# -> [ { id: "...", status: "needs_review", current_agent: "pdf_generation",
-#        confidence: 0.85, result: { compliance: { approved: false, ... }, ... } },
-#      { id: "...", status: "awaiting_review", current_agent: "human_review",
+# -> [ { id: "...", donor_name: "Eleanor Whitfield", campaign_name: null,
+#        status: "needs_review", current_agent: "pdf_generation", confidence: 0.85 },
+#      { id: "...", donor_name: "Marcus Alvarez", campaign_name: null,
+#        status: "awaiting_review", current_agent: "human_review",
 #        pending_review: { stage: "recommendation", ... } },
-#      ... ]
+#      ... ]  # a lighter WorkflowReviewSummary, not the full run payload
 
 curl "localhost:8000/api/v1/workflow/reviews?status=awaiting_review"
 # -> only the genuinely blocked runs — filter to one queue at a time
+
+curl "localhost:8000/api/v1/workflow/reviews?limit=20&offset=20"
+# -> page 2 of 20; both default to a full-listing-sized page (limit=50) when omitted
 ```
 
 `donor_id` accepts either the CRM's `external_id` (e.g. `"d-0009"`, as seeded) or our internal UUID directly.
+
+`GET /workflow/{id}` also carries `review_history` — every human decision made on that run (stage, action, reviewer, notes, timestamp), not just the one that most recently resolved it. A run can pause up to three times (address, recommendation, compliance), so this is one entry per pause, not a field that gets overwritten. It's derived from `agent_audit_log` — every agent decision, including `human_review`'s, is already written there with its reasoning — rather than a new column, so there's exactly one source of truth for "what happened on this run" instead of two that can drift apart.
 
 The seed dataset (`backend/scripts/seed_db.py`, 12 donors) covers every branch through all six agents — running all twelve through the real stack gives exactly:
 
