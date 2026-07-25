@@ -56,6 +56,8 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
 
+**Known limitation:** no auth on any API endpoint (single-tenant demo, mocked integrations behind a real MCP protocol layer) — would add API-key/OAuth auth for a multi-tenant deployment; deliberately not built here since it isn't agentic-AI-specific work.
+
 See `docs/` (added as phases land) for architecture diagrams and design notes.
 
 ### The graph so far
