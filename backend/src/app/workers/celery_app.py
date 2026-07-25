@@ -12,6 +12,11 @@ configure_tracing(service_name="prf-celery-worker")
 # instead of starting over as a disconnected trace on the worker side.
 CeleryInstrumentor().instrument()
 
+# Import registers the worker_process_init/task_prerun/task_postrun signal
+# handlers that back GET :celery_metrics_port/metrics -- unused directly, the
+# side effect of importing is the point.
+from app.workers import metrics as _metrics  # noqa: E402,F401
+
 settings = get_settings()
 
 celery_app = Celery(

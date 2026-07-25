@@ -12,6 +12,7 @@ from app.db.models import WorkflowRun
 from app.db.session import db_session
 from app.graph.builder import build_graph
 from app.workers.celery_app import celery_app
+from app.workers.metrics import pipeline_human_review_pauses_total, pipeline_runs_total
 
 log = get_logger(__name__)
 
@@ -85,6 +86,7 @@ async def _run(workflow_run_id: str, resume_command: Command | None) -> None:
                 run.completed_at = datetime.now(UTC)
                 await session.commit()
             log.error("workflow_run.failed", workflow_run_id=workflow_run_id, error=str(exc))
+            pipeline_runs_total.labels(status="failed").inc()
             raise
     finally:
         await reset_engine()
@@ -105,6 +107,8 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
             run.pending_review = payload
             await session.commit()
         log.info("workflow_run.awaiting_review", workflow_run_id=workflow_run_id)
+        pipeline_human_review_pauses_total.labels(stage=payload.get("stage", "unknown")).inc()
+        pipeline_runs_total.labels(status="awaiting_review").inc()
         return
 
     aggregate: dict[str, Any] = {}
@@ -142,6 +146,7 @@ async def _handle_result(run_uuid: uuid.UUID, workflow_run_id: str, result: dict
         status=status,
         confidence=confidence,
     )
+    pipeline_runs_total.labels(status=status).inc()
 
 
 def _derive_terminal_status(result: dict, settings) -> tuple[str, float | None, str]:
