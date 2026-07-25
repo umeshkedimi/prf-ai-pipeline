@@ -52,7 +52,7 @@ This project is built **incrementally, phase by phase**, each phase fully workin
 | **5** ✅ done | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP, chained after Campaign Personalization; a third review trigger on unregistered-state solicitation |
 | **6** ✅ done | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP, chained after Compliance — no LLM call, purely mechanical assembly and a mocked vendor order |
 | **7** ✅ done | Review queue (`GET /workflow/reviews`, listing `awaiting_review`/`needs_review` runs with donor/campaign names and pagination) + per-run decision history (`review_history` on `GET /workflow/{id}`, derived from the audit trail — a run can pause up to three times) + routing a disapproved compliance review (`approved: false`) to `needs_review` + `graph/builder.py` split into named verification/fulfillment node units |
-| **8** 🟡 in progress | **8a** ✅ React review dashboard (`frontend/`) — queue view, run detail with full audit trail, decision submission, review history. **8b** OpenTelemetry + Prometheus, **8c** production hardening — not started |
+| **8** 🟡 in progress | **8a** ✅ React review dashboard (`frontend/`) — queue view, run detail with full audit trail, decision submission, review history. **8b** ✅ OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning the API, Celery, and every agent node; pipeline/task metrics on a provisioned dashboard. **8c** production hardening — not started |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework) below.
 
@@ -210,6 +210,52 @@ last resolved it) and a "start a new run" form for `POST /workflow/run`. A
 submitted decision resumes the graph asynchronously via Celery, same as the
 API always has — the UI says so and expects a manual refresh rather than
 faking a synchronous result.
+
+### Observability (Phase 8b)
+
+OpenTelemetry tracing and Prometheus metrics across the API, Celery, and the
+LangGraph pipeline itself, backed by Jaeger (traces) and Grafana (metrics),
+all provisioned in `docker-compose.yml`:
+
+```bash
+docker compose up -d jaeger prometheus grafana
+# Jaeger UI:   http://localhost:16686
+# Prometheus:  http://localhost:9090
+# Grafana:     http://localhost:3000  (anonymous admin access, local-only)
+```
+
+**Tracing.** The tricky part of instrumenting this system isn't any one
+process — it's that a run crosses a real process boundary: the API enqueues
+via Celery, a worker picks it up, and only then does the LangGraph pipeline
+actually execute. `opentelemetry-instrumentation-celery` closes that gap by
+injecting the active trace context into the task message's headers on
+publish and restoring it on the worker side, so `POST /workflow/run` and the
+`run_workflow` task it enqueues render as *one* trace, not two disconnected
+ones. Every graph node gets its own child span (`agent.<node_name>`) via a
+single `traced_node()` wrapper applied uniformly in `graph/builder.py` — so
+a slow run is diagnosable down to which specific agent was slow, without
+having touched any individual agent module. Verified live: a `POST
+/workflow/run` for d-0002 through `completed` produced one 17-span trace,
+correctly split as `prf-api` (HTTP handling, the Celery publish) followed by
+`prf-celery-worker` (task execution, all 11 agent nodes in order).
+
+**Metrics.** The API gets request count/latency for free via
+`prometheus-fastapi-instrumentator` (`GET /metrics`). The Celery worker has
+no HTTP server of its own, so `workers/metrics.py` starts a dedicated one on
+`:9100` and records task duration/count via Celery's
+`task_prerun`/`task_postrun` signals, plus two pipeline-specific counters —
+`pipeline_runs_total{status=}` and `pipeline_human_review_pauses_total{stage=}`
+— recorded from `workers/tasks.py`, where the terminal status is actually
+decided. The worker is pinned to `--concurrency=1`: `prometheus_client`'s
+registry isn't fork-aware, so Celery's default multi-process prefork pool
+would have left most task executions' metrics unrecorded on whichever forked
+process didn't win the port bind — a real bug caught during live
+verification, not a hypothetical.
+
+A starter Grafana dashboard (`observability/grafana/dashboards/pipeline.json`)
+is provisioned automatically: runs by terminal status, review pauses by
+stage, Celery task duration (p50/p95) and outcomes, and API request
+rate/latency.
 
 ### Demo: the full human-in-the-loop loop via the API
 
