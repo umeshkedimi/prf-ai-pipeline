@@ -76,10 +76,50 @@ services:
       timeout: 5s
       retries: 10
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317" # OTLP gRPC (api/celery-worker export traces here)
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+      - celery-worker
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
   celery-worker:
     build: ./backend
-    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    # --concurrency=1: prometheus_client's registry is per-process, not
+    # fork-aware (see workers/metrics.py) -- one worker process is also all
+    # this demo's single-run-at-a-time load needs.
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=1"]
+    ports:
+      - "9100:9100" # Prometheus metrics (workers/metrics.py)
     environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      CELERY_METRICS_PORT: "9100"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       CHECKPOINTER_DATABASE_URL: postgresql://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
@@ -145,6 +185,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     volumes:
       # Same mount as celery-worker (see its comment) -- the API needs to
       # read a letter PDF to serve it via GET /workflow/{id}/pdf; it never

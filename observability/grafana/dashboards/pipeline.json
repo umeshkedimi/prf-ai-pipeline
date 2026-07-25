@@ -1,0 +1,86 @@
+{
+  "title": "PRF AI Pipeline",
+  "uid": "prf-ai-pipeline",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Workflow runs by terminal status",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (status) (pipeline_runs_total)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Human review pauses by stage",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (stage) (pipeline_human_review_pauses_total)",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Celery task duration (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, task_name) (rate(celery_task_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{task_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, task_name) (rate(celery_task_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{task_name}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Celery task outcomes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (task_name, outcome) (rate(celery_task_total[5m]))",
+          "legendFormat": "{{task_name}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "API request rate by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(http_requests_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "API request latency (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{handler}}"
+        }
+      ]
+    }
+  ]
+}

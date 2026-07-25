@@ -3,13 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.telemetry import configure_tracing
 
 configure_logging()
 configure_tracing(service_name="prf-api")
+
+# Must import after configure_tracing() above -- this router pulls in
+# workers/tasks.py -> workers/celery_app.py, whose own module-level
+# configure_tracing(service_name="prf-celery-worker") call would otherwise
+# win the _configured race and mislabel every span this process emits.
+from app.api.v1.router import api_router  # noqa: E402
 
 app = FastAPI(title="PRF AI Pipeline", version="0.1.0")
 app.add_middleware(

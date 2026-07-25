@@ -15,6 +15,9 @@ from celery import signals
 from prometheus_client import Counter, Histogram, start_http_server
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+log = get_logger(__name__)
 
 celery_task_duration_seconds = Histogram(
     "celery_task_duration_seconds", "Celery task execution time", ["task_name"]
@@ -34,7 +37,16 @@ _task_started_at: dict[str, float] = {}
 
 @signals.worker_process_init.connect
 def _start_metrics_server(**_kwargs) -> None:
-    start_http_server(get_settings().celery_metrics_port)
+    # Fires once per forked worker process. docker-compose pins the worker to
+    # a single process (see its command's --concurrency=1 -- prometheus_client's
+    # in-memory registry isn't fork-aware, so N processes would each keep a
+    # local, mutually-invisible copy of these counters and only the one that
+    # wins this bind would ever be scraped). The guard is defensive, not the
+    # fix, in case concurrency is ever raised without noticing this comment.
+    try:
+        start_http_server(get_settings().celery_metrics_port)
+    except OSError:
+        log.warning("celery_metrics.port_already_bound")
 
 
 @signals.task_prerun.connect
