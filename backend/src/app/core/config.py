@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # all, so it has to exist the moment the dashboard does.
     cors_allowed_origins: str = "http://localhost:5173"
 
+    # OTLP gRPC endpoint traces are exported to. docker-compose points both
+    # api/celery-worker at the bundled Jaeger container's OTLP receiver;
+    # unset/bare `uv run` still defaults sanely to a local collector on
+    # localhost.
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    # Celery worker's Prometheus scrape port (task-duration/count metrics —
+    # see workers/metrics.py). The API exposes its own HTTP metrics on its
+    # normal port via prometheus-fastapi-instrumentator, so only the worker
+    # needs a dedicated port.
+    celery_metrics_port: int = 9100
+
     log_level: str = "INFO"
     confidence_threshold_donor_verification: float = 0.80
     confidence_threshold_address_intelligence: float = 0.80

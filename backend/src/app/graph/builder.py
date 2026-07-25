@@ -14,6 +14,7 @@ from app.agents.pdf_generation.agent import generate_pdf
 from app.core.config import get_settings
 from app.graph.checkpointer import get_checkpointer
 from app.graph.state import PipelineState
+from app.graph.tracing import traced_node
 
 
 def route_after_verification(state: PipelineState) -> str:
@@ -104,11 +105,11 @@ def _add_verification_unit(graph: StateGraph) -> None:
     deterministic checks (eligibility, address confidence) rather than LLM
     judgment, so nothing downstream of this unit can be reached for a donor who
     fails either one."""
-    graph.add_node("fetch_core_data", fetch_core_data)
-    graph.add_node("gather_context", gather_context)
-    graph.add_node("synthesize_verdict", synthesize_verdict)
-    graph.add_node("verify_address", verify_address)
-    graph.add_node("assess_and_normalize", assess_and_normalize)
+    graph.add_node("fetch_core_data", traced_node("fetch_core_data", fetch_core_data))
+    graph.add_node("gather_context", traced_node("gather_context", gather_context))
+    graph.add_node("synthesize_verdict", traced_node("synthesize_verdict", synthesize_verdict))
+    graph.add_node("verify_address", traced_node("verify_address", verify_address))
+    graph.add_node("assess_and_normalize", traced_node("assess_and_normalize", assess_and_normalize))
 
     graph.add_edge(START, "fetch_core_data")
     graph.add_edge("fetch_core_data", "gather_context")
@@ -129,12 +130,14 @@ def _add_fulfillment_unit(graph: StateGraph) -> None:
     deliverable donor into a priced ask, a personalized letter, a compliance
     check, and a print-ready PDF. Everything here consumes the verification
     unit's output; nothing here feeds back into it."""
-    graph.add_node("compute_rfm", compute_rfm)
-    graph.add_node("recommend_ask", recommend_ask)
-    graph.add_node("personalize_letter", personalize_letter)
-    graph.add_node("gather_disclosures", gather_disclosures)
-    graph.add_node("review_letter_compliance", review_letter_compliance)
-    graph.add_node("generate_pdf", generate_pdf)
+    graph.add_node("compute_rfm", traced_node("compute_rfm", compute_rfm))
+    graph.add_node("recommend_ask", traced_node("recommend_ask", recommend_ask))
+    graph.add_node("personalize_letter", traced_node("personalize_letter", personalize_letter))
+    graph.add_node("gather_disclosures", traced_node("gather_disclosures", gather_disclosures))
+    graph.add_node(
+        "review_letter_compliance", traced_node("review_letter_compliance", review_letter_compliance)
+    )
+    graph.add_node("generate_pdf", traced_node("generate_pdf", generate_pdf))
 
     graph.add_edge("compute_rfm", "recommend_ask")
     graph.add_conditional_edges(
@@ -168,7 +171,7 @@ def _build_graph() -> StateGraph:
     _add_verification_unit(graph)
     _add_fulfillment_unit(graph)
 
-    graph.add_node("human_review", human_review)
+    graph.add_node("human_review", traced_node("human_review", human_review))
     graph.add_conditional_edges(
         "human_review",
         route_after_human_review,
