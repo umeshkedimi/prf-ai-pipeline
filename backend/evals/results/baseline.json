@@ -5,7 +5,7 @@
       "description": "Semantic search over campaign knowledge, scored apart from generation",
       "runs_per_case": 3,
       "case_count": 10,
-      "duration_s": 12.45,
+      "duration_s": 18.15,
       "metrics": [
         {
           "name": "recall@1",
@@ -33,13 +33,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 414.3,
+          "value": 604.6,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 933.0,
+          "value": 8173.0,
           "detail": null,
           "note": null
         }
@@ -81,7 +81,7 @@
       "description": "Does the groundedness judge still detect fabrication? (controls the scorer itself)",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 6.07,
+      "duration_s": 10.37,
       "metrics": [
         {
           "name": "judge_verdict_correct",
@@ -91,13 +91,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 403.9,
+          "value": 690.9,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 2111.0,
+          "value": 3535.0,
           "detail": null,
           "note": null
         }
@@ -112,7 +112,7 @@
       "description": "Donor eligibility classification + confidence calibration",
       "runs_per_case": 3,
       "case_count": 11,
-      "duration_s": 491.49,
+      "duration_s": 477.82,
       "metrics": [
         {
           "name": "eligible_correct",
@@ -153,29 +153,29 @@
         },
         {
           "name": "expected_calibration_error",
-          "value": 0.0973,
+          "value": 0.1021,
           "detail": {
             "buckets": [
               {
                 "range": "0.7-0.8",
                 "count": 7,
-                "mean_confidence": 0.7429,
+                "mean_confidence": 0.7357,
                 "accuracy": 1.0,
-                "gap": 0.2571
+                "gap": 0.2643
               },
               {
                 "range": "0.8-0.9",
                 "count": 5,
-                "mean_confidence": 0.82,
+                "mean_confidence": 0.81,
                 "accuracy": 1.0,
-                "gap": 0.18
+                "gap": 0.19
               },
               {
                 "range": "0.9-1.0",
                 "count": 21,
-                "mean_confidence": 0.9757,
+                "mean_confidence": 0.9729,
                 "accuracy": 1.0,
-                "gap": 0.0243
+                "gap": 0.0271
               }
             ]
           },
@@ -183,13 +183,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 14893.3,
+          "value": 14478.9,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 20032.0,
+          "value": 18817.0,
           "detail": null,
           "note": null
         }
@@ -204,7 +204,7 @@
       "description": "Ask-selection rule compliance + RAG groundedness (judged by a separate model)",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 171.5,
+      "duration_s": 171.72,
       "metrics": [
         {
           "name": "ask_in_ladder",
@@ -220,7 +220,7 @@
         },
         {
           "name": "sources_valid",
-          "value": 1.0,
+          "value": 0.7333,
           "detail": null,
           "note": null
         },
@@ -244,19 +244,62 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 10861.9,
+          "value": 10831.7,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 13210.0,
+          "value": 13785.0,
           "detail": null,
           "note": null
         }
       ],
-      "flaky_case_ids": [],
+      "flaky_case_ids": [
+        "d-0001",
+        "d-0006",
+        "d-0011"
+      ],
       "failures": [
+        {
+          "case_id": "d-0001",
+          "scorer": "sources_valid",
+          "mean_score": 0.667,
+          "run_scores": [
+            0.0,
+            1.0,
+            1.0
+          ],
+          "expected": {
+            "scenario": "active donor, single clean gift"
+          }
+        },
+        {
+          "case_id": "d-0006",
+          "scorer": "sources_valid",
+          "mean_score": 0.333,
+          "run_scores": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "expected": {
+            "scenario": "anomalous $50k outlier that must stay excluded from the anchor"
+          }
+        },
+        {
+          "case_id": "d-0011",
+          "scorer": "sources_valid",
+          "mean_score": 0.667,
+          "run_scores": [
+            1.0,
+            1.0,
+            0.0
+          ],
+          "expected": {
+            "scenario": "major donor, ladder in major-gift range"
+          }
+        },
         {
           "case_id": "d-0006",
           "scorer": "outlier_respected",
@@ -279,7 +322,7 @@
       "description": "End-to-end routing: terminal state and node path across the whole graph",
       "runs_per_case": 3,
       "case_count": 12,
-      "duration_s": 1127.39,
+      "duration_s": 1118.65,
       "metrics": [
         {
           "name": "terminal_state_correct",
@@ -301,13 +344,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 31316.0,
+          "value": 31073.1,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 52565.0,
+          "value": 59437.0,
           "detail": null,
           "note": null
         }
@@ -344,7 +387,7 @@
       "description": "Letter-draft rule compliance (tone/segment fidelity, ask reference) + RAG groundedness",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 189.47,
+      "duration_s": 185.54,
       "metrics": [
         {
           "name": "tone_and_segment_unchanged",
@@ -372,41 +415,41 @@
         },
         {
           "name": "groundedness",
-          "value": 0.9333,
+          "value": 1.0,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_mean",
-          "value": 12159.4,
+          "value": 11893.0,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 17963.0,
+          "value": 15345.0,
           "detail": null,
           "note": null
         }
       ],
       "flaky_case_ids": [
-        "d-0001",
+        "d-0006",
         "d-0008",
         "d-0009",
         "d-0011"
       ],
       "failures": [
         {
-          "case_id": "d-0001",
+          "case_id": "d-0006",
           "scorer": "sources_valid",
           "mean_score": 0.667,
           "run_scores": [
+            0.0,
             1.0,
-            1.0,
-            0.0
+            1.0
           ],
           "expected": {
-            "scenario": "active donor, single clean gift"
+            "scenario": "active donor with a multi-gift history"
           }
         },
         {
@@ -414,8 +457,8 @@
           "scorer": "sources_valid",
           "mean_score": 0.667,
           "run_scores": [
-            0.0,
             1.0,
+            0.0,
             1.0
           ],
           "expected": {
@@ -438,11 +481,11 @@
         {
           "case_id": "d-0009",
           "scorer": "references_recommended_ask",
-          "mean_score": 0.333,
+          "mean_score": 0.667,
           "run_scores": [
             0.0,
             1.0,
-            0.0
+            1.0
           ],
           "expected": {
             "scenario": "single modest gift"
@@ -450,11 +493,11 @@
         },
         {
           "case_id": "d-0011",
-          "scorer": "groundedness",
+          "scorer": "references_recommended_ask",
           "mean_score": 0.667,
           "run_scores": [
-            0.0,
             1.0,
+            0.0,
             1.0
           ],
           "expected": {
@@ -470,7 +513,7 @@
       "description": "Disclosure-lookup correctness (deterministic) + letter-content risk review",
       "runs_per_case": 3,
       "case_count": 4,
-      "duration_s": 39.09,
+      "duration_s": 43.22,
       "metrics": [
         {
           "name": "tax_statement_always_present",
@@ -492,25 +535,42 @@
         },
         {
           "name": "flag_outcome_matches",
-          "value": 1.0,
+          "value": 0.9167,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_mean",
-          "value": 3257.1,
+          "value": 3601.1,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 7035.0,
+          "value": 6759.0,
           "detail": null,
           "note": null
         }
       ],
-      "flaky_case_ids": [],
-      "failures": [],
+      "flaky_case_ids": [
+        "d-0008-clean-1"
+      ],
+      "failures": [
+        {
+          "case_id": "d-0008-clean-1",
+          "scorer": "flag_outcome_matches",
+          "mean_score": 0.667,
+          "run_scores": [
+            1.0,
+            0.0,
+            1.0
+          ],
+          "expected": {
+            "reviewed": true,
+            "should_flag": false
+          }
+        }
+      ],
       "errors": [],
       "scorer_errors": []
     },
@@ -519,7 +579,7 @@
       "description": "Deterministic PDF assembly (file written, disclosures pass through) + vendor order correctness",
       "runs_per_case": 3,
       "case_count": 3,
-      "duration_s": 0.62,
+      "duration_s": 0.64,
       "metrics": [
         {
           "name": "pdf_file_exists",
@@ -553,13 +613,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 68.6,
+          "value": 70.6,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 89.0,
+          "value": 86.0,
           "detail": null,
           "note": null
         }
@@ -570,8 +630,8 @@
       "scorer_errors": []
     }
   },
-  "generated_at": "2026-07-23T04:21:02.644485+00:00",
-  "git_sha": "6ff529003e1949d43b8b011cef16efbb4dcaa984",
+  "generated_at": "2026-07-27T10:15:42.702294+00:00",
+  "git_sha": "0c2dc0b4714c1ceb25548b9fbc959b3af5c77d1f",
   "llm_model": "qwen2.5:14b",
   "judge_model": "llama3.1:8b"
 }

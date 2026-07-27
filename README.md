@@ -696,24 +696,27 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 
 ### Committed baseline
 
-`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case. From `backend/evals/results/baseline.json`:
+`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case, 34 minutes wall time. From `backend/evals/results/baseline.json` — recorded at `0c2dc0b` on a clean tree, so the SHA can actually reproduce it:
 
 | suite | headline metrics | duration |
 |---|---|---|
-| `judge_control` | `judge_verdict_correct` **1.000** | 6s |
-| `retrieval` | `recall@1` 0.900 · `recall@3` **1.000** · `recall@5` **1.000** · `mrr` 0.950 | 12s |
-| `verification` | `accuracy` **1.000** · `recall_ineligible` **1.000** · `expected_calibration_error` 0.097 | 491s |
-| `recommendation` | `ask_in_ladder` **1.000** · `fields_unchanged` **1.000** · `groundedness` **1.000** · `outlier_respected` 0.800 | 172s |
-| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `groundedness` 0.933 · `references_recommended_ask` 0.867 · `sources_valid` 0.800 | 189s |
-| `compliance` | `tax_statement_always_present` **1.000** · `review_ran_when_expected` **1.000** · `flag_outcome_matches` **1.000** | 39s |
+| `judge_control` | `judge_verdict_correct` **1.000** | 10s |
+| `retrieval` | `recall@1` 0.900 · `recall@3` **1.000** · `recall@5` **1.000** · `mrr` 0.950 | 18s |
+| `verification` | `accuracy` **1.000** · `recall_ineligible` **1.000** · `expected_calibration_error` 0.102 | 478s |
+| `recommendation` | `ask_in_ladder` **1.000** · `fields_unchanged` **1.000** · `groundedness` **1.000** · `outlier_respected` 0.800 · `sources_valid` 0.733 | 172s |
+| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `groundedness` **1.000** · `references_recommended_ask` 0.867 · `sources_valid` 0.800 | 186s |
+| `compliance` | `tax_statement_always_present` **1.000** · `review_ran_when_expected` **1.000** · `flag_outcome_matches` 0.917 | 43s |
 | `pdf_generation` | all five deterministic scorers **1.000** | 1s |
-| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` 0.917 | 1127s |
+| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` 0.917 | 1119s |
 
 Zero execution errors across all eight suites. Reading the misses honestly:
 
 - **`retrieval` `recall@1` 0.900** — one case (`adoption-story`) fails *deliberately*: an aggregate-stats chunk outranks the narrative story, which is a defensible tie. Tuning it to pass would strip the suite of discriminating power.
-- **`trajectory` `terminal_state_correct` 0.917** — d-0010, consistently. Traced and understood, not flaky.
-- **`campaign_personalization` flakiness** on 4 of 5 cases, and **`recommendation` `outlier_respected` 0.800** — both trace to the one accepted source of non-determinism, `gather_context`'s tool-choice loop (below). `outlier_gift_excluded` is deterministic Python given the donation list; the variance is in whether the loop fetched the full history that run.
+- **`trajectory` `terminal_state_correct` 0.917** — d-0010, scoring 0.000 identically across all three runs. The only non-flaky failure in the sweep, and therefore the only one that represents a real disagreement rather than variance: the case still expects the address-review pause that this donor stopped taking when the pipeline moved to `qwen2.5:14b`. A confidently-vacant address is unambiguous rather than uncertain, so ending without a pause is correct behavior and the *expectation* is what's stale.
+- **The `sources_valid` scores (0.733 and 0.800) and `compliance`'s `flag_outcome_matches` 0.917** are all flaky — scores like `[0.0, 1.0, 1.0]` between *identical* runs. `recommendation`'s `sources_valid` in particular sat at 1.000 in the previous baseline and 0.733 here; the honest reading is that the earlier number was a fortunate sweep rather than a real level, not that anything regressed. Recording the lower value is the point of keeping a baseline at all.
+- **`recommendation` `outlier_respected` 0.800** — traces to the one accepted source of non-determinism, `gather_context`'s tool-choice loop (below). `outlier_gift_excluded` is deterministic Python given the donation list; the variance is in whether the loop fetched the full history that run.
+
+Calibration is measured but deliberately not over-claimed: at n=33 the reliability table is enough to demonstrate the mechanism and catch gross miscalibration, not enough to set production thresholds from. It currently shows the model *under*-confident — stated 0.736 against observed 1.000 in the 0.7–0.8 bucket — which is the safe direction for a pipeline that routes on these numbers.
 
 ### Why the framework is shaped this way
 
@@ -729,7 +732,7 @@ Zero execution errors across all eight suites. Reading the misses honestly:
 
 **Why results carry a git SHA and model names.** A score is only meaningful if you can attribute it to code. Results are written to `backend/evals/results/latest.json`, compared against the committed `baseline.json`, and persisted to an `eval_runs` table with the git SHA and both model names. Recording the models matters as much as the SHA: swapping provider or model moves *every* metric at once, which reads as a code regression in a delta column unless the report can say otherwise — so `render_console` prints an explicit model-drift warning when the baseline's models differ from the current ones.
 
-Sweeps are usually run mid-iteration, so a bare `HEAD` would silently credit the last commit for scores produced by uncommitted code. `current_git_sha()` therefore appends `-dirty` when tracked files are modified. The committed baseline is the standing example of why: it records `pdf_generation` metrics against a SHA whose tree contains no `pdf_generation` suite, because that sweep ran before the phase was committed.
+Sweeps are usually run mid-iteration, so a bare `HEAD` would silently credit the last commit for scores produced by uncommitted code. `current_git_sha()` therefore appends `-dirty` when tracked files are modified. This was found the way such things usually are — by checking: an earlier baseline recorded `pdf_generation` metrics against a SHA whose tree contained no `pdf_generation` suite, because that sweep had run before the phase was committed. The current baseline was re-swept on a clean tree specifically so its SHA reproduces it.
 
 ## Design decisions and trade-offs
 
