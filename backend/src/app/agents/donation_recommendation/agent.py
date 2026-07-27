@@ -4,18 +4,21 @@ from datetime import date
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.donation_recommendation.prompts import RECOMMEND_ASK_SYSTEM_PROMPT
-from app.agents.donation_recommendation.rfm import build_ask_ladder
+from app.agents.donation_recommendation.rfm import build_ask_ladder, enforce_deterministic_fields
 from app.agents.donation_recommendation.rfm import compute_rfm as compute_rfm_scores
 from app.agents.donation_recommendation.schemas import RecommendationResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
 from app.core.llm import ainvoke_structured, get_llm
+from app.core.logging import get_logger
 from app.graph.state import PipelineState
 from app.mcp_clients.crm_client import get_crm_tools, parse_list
 from app.rag.retriever import retrieve
 
 AGENT_NAME = "donation_recommendation"
 RETRIEVE_K = 4
+
+log = get_logger(__name__)
 
 
 def build_retrieval_query(segment: str) -> str:
@@ -91,14 +94,32 @@ async def recommend_ask(state: PipelineState) -> dict:
     ]
 
     result, usage = await ainvoke_structured(llm, RecommendationResult, messages)
-    recommendation = result.model_dump()
+    # The prompt asks the model to copy the computed fields through and pick an
+    # ask from the ladder. This is what makes that true rather than hoped for —
+    # the money math is restored from compute_rfm's output regardless of what
+    # came back, so no model output can move a dollar figure or the major-gift
+    # gate that routes on it.
+    recommendation, corrections = enforce_deterministic_fields(rfm, result.model_dump())
+    if corrections:
+        log.warning(
+            "recommendation.deterministic_fields_corrected",
+            workflow_run_id=state["workflow_run_id"],
+            corrections=corrections,
+        )
+
+    # Corrections ride the audit snapshot rather than pipeline state: a silently
+    # repaired deviation is exactly the kind of thing an explainability trail
+    # exists to surface, but it isn't part of the recommendation itself.
+    audit_output = dict(recommendation)
+    if corrections:
+        audit_output["deterministic_corrections"] = corrections
 
     await write_audit_log(
         workflow_run_id=state["workflow_run_id"],
         agent_name=AGENT_NAME,
         step="recommend_ask",
         input_snapshot={"rfm": rfm, "query": query},
-        output=recommendation,
+        output=audit_output,
         confidence=recommendation["confidence"],
         reasoning="; ".join(recommendation["rationale"]),
         source_refs=[

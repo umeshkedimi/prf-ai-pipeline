@@ -151,3 +151,60 @@ def build_ask_ladder(rfm: dict) -> list[float]:
         rungs = [base, base * 1.5, base * 2.5]
 
     return [_round_to(r) for r in rungs]
+
+
+# Fields this module computes and therefore owns. The prompt asks the model to
+# copy them through unchanged, but asking is not enforcing.
+DETERMINISTIC_FIELDS = (
+    "segment",
+    "rfm_score",
+    "recency_days",
+    "frequency",
+    "monetary_total",
+    "anchor_gift",
+    "outlier_gift_excluded",
+    "ask_ladder",
+)
+
+
+def enforce_deterministic_fields(rfm: dict, recommendation: dict) -> tuple[dict, list[str]]:
+    """Restore the computed fields and snap the ask back onto the ladder.
+
+    The determinism boundary was previously enforced only by instruction: the
+    schema's `recommended_ask` field carried a *description* saying it must be a
+    ladder value, which Pydantic does not check, and nothing downstream verified
+    it. The eval suite measured compliance (`ask_in_ladder`, `fields_unchanged`
+    both sit at 1.000) but measurement is not a guarantee — and the major-gift
+    human-review gate routes on this number, so an off-ladder value would have
+    let a model-produced float decide whether a human sees the letter at all.
+
+    Rather than fail the run, deviations are corrected and reported: the ladder
+    is the source of truth, so the nearest rung is always a defensible answer,
+    and the deviation itself is signal worth keeping in the audit trail rather
+    than an error worth discarding a whole pipeline run over.
+    """
+    corrected = dict(recommendation)
+    deviations: list[str] = []
+
+    for field in DETERMINISTIC_FIELDS:
+        if field not in rfm:
+            continue
+        authoritative = rfm[field]
+        if corrected.get(field) != authoritative:
+            deviations.append(
+                f"{field}: model returned {corrected.get(field)!r}, restored {authoritative!r}"
+            )
+            corrected[field] = authoritative
+
+    ladder = rfm.get("ask_ladder") or []
+    ask = corrected.get("recommended_ask")
+    # An empty ladder can't happen via build_ask_ladder (it always returns three
+    # rungs), but snapping against nothing would raise rather than degrade.
+    if ladder and ask not in ladder:
+        nearest = min(ladder, key=lambda rung: abs(rung - (ask or 0.0)))
+        deviations.append(
+            f"recommended_ask: model returned {ask!r}, snapped to nearest rung {nearest!r}"
+        )
+        corrected["recommended_ask"] = nearest
+
+    return corrected, deviations

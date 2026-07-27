@@ -69,8 +69,11 @@ def route_after_recommendation(state: PipelineState) -> str:
     """The graph's second interrupt trigger: a major-gift-sized ask pauses for
     human approval ("ask amount" is on the spec's human-review trigger list).
 
-    Deliberately keyed on the ask amount alone, which is *deterministic* (it
-    comes from the computed ask ladder), not on the model's confidence. Two
+    Deliberately keyed on the ask amount alone, which is *deterministic* — it
+    is one of the rungs the ask ladder computed, guaranteed by
+    `enforce_deterministic_fields` snapping the model's pick back onto the
+    ladder rather than by the prompt asking it to comply — not on the model's
+    confidence. Two
     reasons: routing a blocking pause off a non-deterministic float would let
     the same donor take different paths on identical data — unacceptable when
     the output is a physical letter — and a recommendation's confidence is a
