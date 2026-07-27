@@ -696,7 +696,7 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 
 ### Committed baseline
 
-`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case, 34 minutes wall time. From `backend/evals/results/baseline.json` — recorded at `0c2dc0b` on a clean tree, so the SHA can actually reproduce it:
+`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case. From `backend/evals/results/baseline.json` — recorded at `5e32501` on a clean tree, so the SHA can actually reproduce it:
 
 | suite | headline metrics | duration |
 |---|---|---|
@@ -707,12 +707,12 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `groundedness` **1.000** · `references_recommended_ask` 0.867 · `sources_valid` 0.800 | 186s |
 | `compliance` | `tax_statement_always_present` **1.000** · `review_ran_when_expected` **1.000** · `flag_outcome_matches` 0.917 | 43s |
 | `pdf_generation` | all five deterministic scorers **1.000** | 1s |
-| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` 0.917 | 1119s |
+| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 1098s |
 
 Zero execution errors across all eight suites. Reading the misses honestly:
 
 - **`retrieval` `recall@1` 0.900** — one case (`adoption-story`) fails *deliberately*: an aggregate-stats chunk outranks the narrative story, which is a defensible tie. Tuning it to pass would strip the suite of discriminating power.
-- **`trajectory` `terminal_state_correct` 0.917** — d-0010, scoring 0.000 identically across all three runs. The only non-flaky failure in the sweep, and therefore the only one that represents a real disagreement rather than variance: the case still expects the address-review pause that this donor stopped taking when the pipeline moved to `qwen2.5:14b`. A confidently-vacant address is unambiguous rather than uncertain, so ending without a pause is correct behavior and the *expectation* is what's stale.
+- **`trajectory` is now clean at 1.000**, having sat at 0.917 for several sweeps. The failing case (d-0010) scored 0.000 *identically* across every run — and that consistency is what identified it. Flaky failures move between runs; a deterministic one means the suite and the system genuinely disagree. Here the system was right: `route_after_address` is documented to end a confident-but-undeliverable address without pausing, and d-0010 returns a flat confidence of 1.0, so there was no uncertainty for a human to adjudicate. The *expectation* was stale, left over from a pipeline model that scored the same donor differently. Corrected in `5e32501` — and the case now covers the third branch of that router, which nothing else exercised.
 - **The `sources_valid` scores (0.733 and 0.800) and `compliance`'s `flag_outcome_matches` 0.917** are all flaky — scores like `[0.0, 1.0, 1.0]` between *identical* runs. `recommendation`'s `sources_valid` in particular sat at 1.000 in the previous baseline and 0.733 here; the honest reading is that the earlier number was a fortunate sweep rather than a real level, not that anything regressed. Recording the lower value is the point of keeping a baseline at all.
 - **`recommendation` `outlier_respected` 0.800** — traces to the one accepted source of non-determinism, `gather_context`'s tool-choice loop (below). `outlier_gift_excluded` is deterministic Python given the donation list; the variance is in whether the loop fetched the full history that run.
 

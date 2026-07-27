@@ -322,11 +322,11 @@
       "description": "End-to-end routing: terminal state and node path across the whole graph",
       "runs_per_case": 3,
       "case_count": 12,
-      "duration_s": 1118.65,
+      "duration_s": 1098.16,
       "metrics": [
         {
           "name": "terminal_state_correct",
-          "value": 0.9167,
+          "value": 1.0,
           "detail": null,
           "note": null
         },
@@ -344,41 +344,19 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 31073.1,
+          "value": 30503.8,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 59437.0,
+          "value": 53721.0,
           "detail": null,
           "note": null
         }
       ],
       "flaky_case_ids": [],
-      "failures": [
-        {
-          "case_id": "d-0010",
-          "scorer": "terminal_state_correct",
-          "mean_score": 0.0,
-          "run_scores": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "expected": {
-            "terminal": "paused:address",
-            "path": [
-              "fetch_core_data",
-              "gather_context",
-              "synthesize_verdict",
-              "verify_address",
-              "assess_and_normalize"
-            ],
-            "scenario": "vacant address, no forwarding found"
-          }
-        }
-      ],
+      "failures": [],
       "errors": [],
       "scorer_errors": []
     },
@@ -630,8 +608,8 @@
       "scorer_errors": []
     }
   },
-  "generated_at": "2026-07-27T10:15:42.702294+00:00",
-  "git_sha": "0c2dc0b4714c1ceb25548b9fbc959b3af5c77d1f",
+  "generated_at": "2026-07-27T10:42:39.753797+00:00",
+  "git_sha": "5e32501467009f52002e7f1bea94373d2786ed2c",
   "llm_model": "qwen2.5:14b",
   "judge_model": "llama3.1:8b"
 }
