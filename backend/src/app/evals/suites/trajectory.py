@@ -49,7 +49,17 @@ _LABELS: list[tuple[str, str, list[str], str]] = [
     ("d-0007", "paused:address", THROUGH_ADDRESS, "no address on file pauses for review"),
     ("d-0008", "end", COMPLIANT_PIPELINE, "clean recurring donor"),
     ("d-0009", "paused:address", THROUGH_ADDRESS, "moved, uncertain forwarding address"),
-    ("d-0010", "paused:address", THROUGH_ADDRESS, "vacant address, no forwarding found"),
+    # Ends rather than pauses, and that is the point of the case: route_after_address
+    # has three outcomes, and this is the only label covering the third one
+    # ("a confident-but-undeliverable address ends here — there's nothing to
+    # mail"). Nothing is uncertain about a vacant address with no forwarding
+    # record, so there is no judgment for a human to add; d-0007/d-0009 still
+    # cover the pause branch. This label previously read "paused:address" and
+    # failed 0.000 across every run of the 2026-07-27 sweep — a stale
+    # expectation, not an inconvenient result: the router's own docstring
+    # documents END as the designed behavior, and the observed confidence is a
+    # flat 1.0 rather than a borderline score that happens to clear the bar.
+    ("d-0010", "end", THROUGH_ADDRESS, "confidently vacant address ends without mailing"),
     (
         "d-0011",
         "paused:recommendation",
