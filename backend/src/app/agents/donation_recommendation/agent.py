@@ -99,7 +99,8 @@ async def recommend_ask(state: PipelineState) -> dict:
     # the money math is restored from compute_rfm's output regardless of what
     # came back, so no model output can move a dollar figure or the major-gift
     # gate that routes on it.
-    recommendation, corrections = enforce_deterministic_fields(rfm, result.model_dump())
+    raw_output = result.model_dump()
+    recommendation, corrections = enforce_deterministic_fields(rfm, raw_output)
     if corrections:
         log.warning(
             "recommendation.deterministic_fields_corrected",
@@ -110,9 +111,17 @@ async def recommend_ask(state: PipelineState) -> dict:
     # Corrections ride the audit snapshot rather than pipeline state: a silently
     # repaired deviation is exactly the kind of thing an explainability trail
     # exists to surface, but it isn't part of the recommendation itself.
+    #
+    # The pre-enforcement output is recorded alongside it, and only when it
+    # actually differs. The eval suite reads it back to score how often the model
+    # complies *unaided* — scoring the enforced output would measure the guard
+    # rather than the model, since the guard makes compliance true by
+    # construction. When nothing was corrected the enforced output already is
+    # the raw one, so storing it again would just duplicate the payload.
     audit_output = dict(recommendation)
     if corrections:
         audit_output["deterministic_corrections"] = corrections
+        audit_output["model_output_raw"] = raw_output
 
     await write_audit_log(
         workflow_run_id=state["workflow_run_id"],

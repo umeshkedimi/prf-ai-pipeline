@@ -14,13 +14,20 @@ a different model than the one that generated the text (see core/llm.py), since
 a model grading its own output is measurably biased toward approving it.
 """
 
+import uuid
+
+from sqlalchemy import select
+
 from app.agents.donation_recommendation.agent import (
     RETRIEVE_K,
     build_retrieval_query,
     compute_rfm,
     recommend_ask,
 )
+from app.agents.donation_recommendation.rfm import DETERMINISTIC_FIELDS
 from app.core.config import get_settings
+from app.db.models import AgentAuditLog
+from app.db.session import db_session
 from app.evals.scorers import FunctionScorer, GroundednessJudge
 from app.evals.suites._common import create_workflow_run, resolve_donor_id
 from app.evals.types import EvalCase, EvalSuite
@@ -66,6 +73,7 @@ async def run_case(case: EvalCase) -> dict:
 
     return {
         "recommendation": recommendation,
+        "model_output_raw": await _raw_model_output(workflow_run_id, recommendation),
         "deterministic_rfm": rfm,
         "context": context,
         "claims": recommendation.get("rationale", []),
@@ -73,23 +81,54 @@ async def run_case(case: EvalCase) -> dict:
     }
 
 
+async def _raw_model_output(workflow_run_id: str, enforced: dict) -> dict:
+    """The model's output *before* enforce_deterministic_fields corrected it.
+
+    recommend_ask records this in the audit trail only when enforcement actually
+    changed something, so an absent entry means the model complied on its own and
+    the enforced output is already the raw one.
+    """
+    async with db_session() as session:
+        result = await session.execute(
+            select(AgentAuditLog.output)
+            .where(AgentAuditLog.workflow_run_id == uuid.UUID(workflow_run_id))
+            .where(AgentAuditLog.step == "recommend_ask")
+            .order_by(AgentAuditLog.created_at.desc())
+            .limit(1)
+        )
+        audited = result.scalar_one_or_none() or {}
+    return audited.get("model_output_raw") or enforced
+
+
 # --- deterministic rule checks -------------------------------------------------
 
 
 def _ask_in_ladder(case: EvalCase, output: dict) -> bool:
-    rec = output["recommendation"]
-    return rec.get("recommended_ask") in (rec.get("ask_ladder") or [])
+    """Scored against the *raw* model output and the authoritative ladder.
+
+    enforce_deterministic_fields now snaps an off-ladder ask back onto the
+    ladder, so scoring the enforced output would report 1.000 by construction —
+    measuring the guard rather than the model. What's worth tracking is how often
+    the model gets it right unaided, which is a real signal when choosing one.
+    """
+    raw, rfm = output["model_output_raw"], output["deterministic_rfm"]
+    return raw.get("recommended_ask") in (rfm.get("ask_ladder") or [])
 
 
 def _fields_unchanged(case: EvalCase, output: dict) -> bool:
     """The prompt requires the deterministic fields be copied through verbatim.
     If the model edits them, the 'money is computed, not generated' guarantee is
-    silently broken even though the output still validates."""
-    rec, rfm = output["recommendation"], output["deterministic_rfm"]
-    return all(
-        rec.get(field) == rfm.get(field)
-        for field in ("segment", "ask_ladder", "anchor_gift", "rfm_score", "frequency")
-    )
+    broken — enforcement now repairs that, so this measures the model's unaided
+    compliance rather than the outcome.
+
+    Checks every field the RFM computation owns. It previously checked five of
+    the eight and sat at 1.000 while the model was live-dropping `recency_days`;
+    `outlier_gift_excluded` — d-0006's outlier protection — was among the
+    unchecked. Sourced from DETERMINISTIC_FIELDS so the scorer and the guard
+    cannot drift apart.
+    """
+    raw, rfm = output["model_output_raw"], output["deterministic_rfm"]
+    return all(raw.get(field) == rfm.get(field) for field in DETERMINISTIC_FIELDS)
 
 
 def _sources_valid(case: EvalCase, output: dict) -> bool:
