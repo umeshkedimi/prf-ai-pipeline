@@ -173,10 +173,15 @@ def enforce_deterministic_fields(rfm: dict, recommendation: dict) -> tuple[dict,
     The determinism boundary was previously enforced only by instruction: the
     schema's `recommended_ask` field carried a *description* saying it must be a
     ladder value, which Pydantic does not check, and nothing downstream verified
-    it. The eval suite measured compliance (`ask_in_ladder`, `fields_unchanged`
-    both sit at 1.000) but measurement is not a guarantee — and the major-gift
-    human-review gate routes on this number, so an off-ladder value would have
-    let a model-produced float decide whether a human sees the letter at all.
+    it. The eval suite appeared to measure compliance and reported a clean
+    1.000 — but it checked five of the eight fields below, and widening it to
+    all eight dropped `fields_unchanged` to 0.000 on every case, every run: the
+    model had been dropping `recency_days` the whole time, and flipping
+    d-0006's `outlier_gift_excluded` in a fifth of runs. So the measurement was
+    not merely insufficient as a guarantee, it was incomplete as a measurement.
+    The major-gift human-review gate routes on `recommended_ask`, so without
+    this an off-ladder value would let a model-produced float decide whether a
+    human sees the letter at all.
 
     Rather than fail the run, deviations are corrected and reported: the ladder
     is the source of truth, so the nearest rung is always a defensible answer,
