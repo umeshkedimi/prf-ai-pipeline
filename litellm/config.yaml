@@ -1,0 +1,86 @@
+# LiteLLM proxy configuration.
+#
+# Why this exists: this project has twice been bitten by uncontrolled LLM spend
+# — a prepaid Anthropic balance drained inside one eval sweep, and a Gemini
+# free-tier sweep that died mid-run in 58 consecutive HTTP 429s (see
+# CLAUDE.local.md, "the eval cost model"). Neither failure was visible until
+# after the money or the quota was gone, because every call went straight from
+# the process to the vendor with nothing in between to count or cap it.
+#
+# The proxy is that missing layer: one place that knows what a call costs,
+# refuses to keep spending past a ceiling, and can fall back to a local model
+# rather than failing a whole sweep.
+#
+# Deliberately NOT using virtual keys / per-team budgets: those require the
+# proxy to own a Postgres schema, which is a second stateful service for a demo
+# with exactly one caller. The in-memory budget and rate caps below need no
+# database and cover the failure this project actually hit.
+
+model_list:
+  # Aliases, not model names. Callers ask for "pipeline"/"judge" and this file
+  # decides what that resolves to — the point of putting a router here at all.
+  # Keeping the judge on a different model than the pipeline is a correctness
+  # requirement, not a cost one: a model grading its own output is biased
+  # toward it (see core/llm.py:get_judge_llm).
+  - model_name: pipeline
+    litellm_params:
+      model: ollama_chat/qwen2.5:14b
+      api_base: os.environ/OLLAMA_BASE_URL
+      # ollama_chat/ rather than ollama/: the former routes through Ollama's
+      # chat completions API, which is the one with working tool-call support.
+      # gather_context's tool-calling loop breaks without it.
+      rpm: 60
+
+  - model_name: judge
+    litellm_params:
+      model: ollama_chat/llama3.1:8b
+      api_base: os.environ/OLLAMA_BASE_URL
+      rpm: 60
+
+  # Hosted models are defined but not in either alias group above, so nothing
+  # routes to them implicitly — an empty API key can't silently become a
+  # failing deployment inside a load-balanced alias. Point LLM_MODEL at one of
+  # these by name to use it.
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+      # The documented free-tier ceiling that ended a sweep: 20 requests per
+      # day per model. Encoded so the proxy refuses the 21st call instead of
+      # the vendor returning 429 and the sweep burning its retries on it.
+      rpm: 5
+
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  # A transient local-inference hiccup shouldn't cost a whole eval sweep. This
+  # is a *transport*-level retry and is intentionally separate from the
+  # schema-level retry in core/llm.py:ainvoke_structured — that one re-asks the
+  # model when it emits output the Pydantic schema rejects, which no proxy can
+  # see. Both are bounded; neither retries forever.
+  num_retries: 2
+  # `timeout`, not `request_timeout` — Router.__init__ silently ignores the
+  # latter and logs a warning rather than failing, so a typo here buys you an
+  # unbounded hang on a stalled local generation.
+  timeout: 600
+  allowed_fails: 3
+  cooldown_time: 30
+
+litellm_settings:
+  # In-memory, resets with the process. Not billing-grade accounting — it is a
+  # circuit breaker sized to the failure already on record: a full
+  # --include-expensive sweep was measured at roughly $2 of hosted inference,
+  # so $10 stops a runaway loop well before it drains a prepaid balance, while
+  # leaving room for several legitimate sweeps.
+  max_budget: 10.0
+  budget_duration: 30d
+  drop_params: true
+  # Ollama rejects sampling params that hosted providers accept; drop_params
+  # lets one caller-side kwarg set work across every backend above rather than
+  # making get_llm() branch per provider all over again.
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

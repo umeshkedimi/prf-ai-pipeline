@@ -76,6 +76,30 @@ services:
       timeout: 5s
       retries: 10
 
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-prf-local}
+      # The proxy is the process that now talks to Ollama, so it needs the
+      # host-gateway address for the same reason api/celery-worker do — inside
+      # a container, localhost:11434 is the container, not the host running
+      # Ollama.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 4000), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
     environment:
