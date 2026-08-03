@@ -25,6 +25,7 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Configuration reference](#configuration-reference)
 - [Getting started](#getting-started)
 - [Frontend (review dashboard)](#frontend-review-dashboard)
+- [Running on Kubernetes](#running-on-kubernetes)
 - [Observability](#observability)
 - [LLM routing and cost control](#llm-routing-and-cost-control)
 - [Demos](#demos)
@@ -456,6 +457,45 @@ The API's CORS middleware allow-lists `http://localhost:5173` by default (`CORS_
 A submitted decision resumes the graph asynchronously via Celery, so the UI offers an explicit Refresh rather than faking a synchronous result.
 
 `src/api.ts` and `src/types.ts` mirror `backend/src/app/schemas/workflow.py` directly — if that schema changes, these are the first place to check.
+
+## Running on Kubernetes
+
+`docker-compose.yml` remains the primary way to run this. The same 12 services
+also deploy to Kubernetes via a Kustomize base in [`k8s/`](k8s/README.md),
+verified end-to-end on a local [kind](https://kind.sigs.k8s.io/) cluster.
+
+The base is **cloud-neutral** — it names neither kind nor a cloud. Everything
+environment-specific lives in `overlays/kind/`: `imagePullPolicy: Never` for
+kind's separate containerd, NodePorts standing in for the LoadBalancer kind has
+no cloud provider to satisfy, and the host address for Ollama. An
+`overlays/eks/` would swap those for ECR references, an ALB Ingress, a `gp3`
+StorageClass, and an IRSA-annotated ServiceAccount without touching the base.
+
+A few decisions carry the same reasoning as the rest of this project. Postgres
+is a StatefulSet because a Deployment's rolling update would start a second pod
+against the same volume. Migrations run as a **Job**, not an initContainer —
+an initContainer runs once per *pod*, so scaling the API to 3 replicas would run
+Alembic three times concurrently. `celery-worker` uses `Recreate` for the same
+single-writer reason that pinned `--concurrency=1` in compose. ConfigMaps are
+*generated* from `litellm/config.yaml` and `observability/` rather than copied,
+so the cluster and compose read one source of truth.
+
+**Three bugs the cluster found that compose structurally could not**, which is
+the honest argument for having done this at all:
+
+1. **LiteLLM was OOMKilled six times** on a 1Gi limit. Compose sets no memory
+   limit, so the process simply took what it needed and its real footprint had
+   never been observed. Declaring limits is what surfaced it.
+2. **A liveness probe restarted a healthy worker.** `exec` probes run without a
+   shell, so `celery@$(hostname)` was passed as a literal and the probe queried
+   a node that cannot exist.
+3. **The image shipped `ingest_knowledge.py` without its corpus** — invisible
+   under compose, where ingest was always run from the host.
+
+One limitation stated rather than hidden: the shared `prf-storage` PVC is
+`ReadWriteOnce`, which works on single-node kind but would strand a pod on
+multi-node EKS. The real fix is S3 with presigned URLs — an application change,
+not a manifest change, so it is documented instead of quietly patched.
 
 ## Observability
 
