@@ -12,7 +12,11 @@ def get_llm(
     provider: str | None = None,
     **kwargs,
 ) -> BaseChatModel:
-    """Provider-agnostic chat model, defaulting to Anthropic per LLM_PROVIDER/LLM_MODEL.
+    """Provider-agnostic chat model resolved from LLM_PROVIDER/LLM_MODEL.
+
+    Supports anthropic, google_genai and ollama directly, plus "litellm" to
+    route through the local proxy instead — see the init_provider comment below
+    and litellm/config.yaml for why that indirection is worth a branch.
 
     Deliberately does not hardcode sampling parameters (temperature/top_p/top_k) —
     Claude Sonnet 5 rejects non-default values for several of these, and other
@@ -26,6 +30,13 @@ def get_llm(
     settings = get_settings()
     resolved_provider = provider or settings.llm_provider
     model_kwargs = dict(kwargs)
+    # The wire protocol init_chat_model should speak, which is normally just the
+    # configured provider. "litellm" is the one case they differ: the proxy is
+    # itself OpenAI-compatible, so the client is a plain OpenAI client pointed
+    # at a different host. "litellm" names the routing layer, "openai" names the
+    # protocol, and conflating them would mean either a redundant dependency or
+    # a config value that lies about where calls actually go.
+    init_provider = resolved_provider
     if resolved_provider == "anthropic" and settings.anthropic_api_key:
         model_kwargs.setdefault("api_key", settings.anthropic_api_key)
     elif resolved_provider == "google_genai" and settings.google_api_key:
@@ -41,9 +52,18 @@ def get_llm(
         model_kwargs.setdefault("num_predict", 2048)
         if settings.ollama_base_url:
             model_kwargs.setdefault("base_url", settings.ollama_base_url)
+    elif resolved_provider == "litellm":
+        init_provider = "openai"
+        model_kwargs.setdefault("base_url", settings.litellm_base_url)
+        model_kwargs.setdefault("api_key", settings.litellm_api_key)
+        # Same runaway-generation guard as the direct-Ollama branch above, spelled
+        # in the OpenAI dialect: the proxy translates max_tokens to Ollama's
+        # num_predict. Routing through a proxy must not quietly drop a limit that
+        # exists because a real sweep hung past 32,000 tokens.
+        model_kwargs.setdefault("max_tokens", 2048)
     return init_chat_model(
         model=model or settings.llm_model,
-        model_provider=resolved_provider,
+        model_provider=init_provider,
         **model_kwargs,
     )
 

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Single .env lives at the repo root (alongside docker-compose.yml), not under
@@ -39,6 +40,28 @@ class Settings(BaseSettings):
     # http://host.docker.internal:11434 in docker-compose.yml; left unset for
     # bare `uv run`, where the real localhost is correct as-is.
     ollama_base_url: str | None = None
+    # LLM_PROVIDER=litellm routes every call through the LiteLLM proxy
+    # (litellm/config.yaml) instead of straight to a vendor, so budget and rate
+    # caps apply. LLM_MODEL then names one of that file's aliases ("pipeline",
+    # "judge"), not a vendor model id. Defaults point at the proxy's published
+    # port, correct for a bare `uv run`; docker-compose overrides with the
+    # service name. Non-None on purpose — an unset base_url would send calls to
+    # the real OpenAI API carrying the proxy's key, which fails confusingly.
+    litellm_base_url: str = "http://localhost:4000/v1"
+    litellm_api_key: str = "sk-prf-local"
+
+    @field_validator("litellm_base_url", "litellm_api_key", mode="before")
+    @classmethod
+    def _blank_falls_back_to_default(cls, value: str | None, info: ValidationInfo) -> str:
+        """A blank env var means "unset", not "empty string".
+
+        `LITELLM_BASE_URL=` in a copied .env would otherwise bind "" over the
+        default above and send every call to the real OpenAI API carrying the
+        proxy's key — the exact confusing failure the default exists to prevent.
+        Reads the declared default back rather than repeating the literal, so
+        the two can't drift.
+        """
+        return value or cls.model_fields[info.field_name].default
 
     # LLM-as-judge model for the evaluation framework. Deliberately a different
     # (and cheaper) model than the one under evaluation: a model grading its own
