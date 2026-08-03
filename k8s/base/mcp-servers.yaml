@@ -1,0 +1,146 @@
+# The four MCP servers. Near-identical by design -- each is a real FastMCP
+# streamable-HTTP server, and keeping them as separate Deployments (rather than
+# sidecars or one multi-tool process) is what makes "independently deployable
+# integration layer" a true statement rather than a diagram.
+#
+# Only mcp-crm touches the database; the other three serve deterministic
+# fixtures, so they get no DATABASE_URL at all. Least privilege by omission.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-crm
+  labels: { app.kubernetes.io/name: mcp-crm }
+spec:
+  selector: { app.kubernetes.io/name: mcp-crm }
+  ports: [{ port: 8100, targetPort: 8100 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-crm
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: mcp-crm }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mcp-crm }
+    spec:
+      containers:
+        - name: server
+          image: prf-backend:local
+          command: ["python", "-m", "app.mcp_servers.crm.server"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef: { name: prf-config, key: DATABASE_URL }
+          ports: [{ containerPort: 8100 }]
+          readinessProbe:
+            tcpSocket: { port: 8100 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-address
+  labels: { app.kubernetes.io/name: mcp-address }
+spec:
+  selector: { app.kubernetes.io/name: mcp-address }
+  ports: [{ port: 8101, targetPort: 8101 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-address
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: mcp-address }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mcp-address }
+    spec:
+      containers:
+        - name: server
+          image: prf-backend:local
+          command: ["python", "-m", "app.mcp_servers.address.server"]
+          ports: [{ containerPort: 8101 }]
+          readinessProbe:
+            tcpSocket: { port: 8101 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-compliance
+  labels: { app.kubernetes.io/name: mcp-compliance }
+spec:
+  selector: { app.kubernetes.io/name: mcp-compliance }
+  ports: [{ port: 8102, targetPort: 8102 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-compliance
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: mcp-compliance }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mcp-compliance }
+    spec:
+      containers:
+        - name: server
+          image: prf-backend:local
+          command: ["python", "-m", "app.mcp_servers.compliance.server"]
+          ports: [{ containerPort: 8102 }]
+          readinessProbe:
+            tcpSocket: { port: 8102 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-print-vendor
+  labels: { app.kubernetes.io/name: mcp-print-vendor }
+spec:
+  selector: { app.kubernetes.io/name: mcp-print-vendor }
+  ports: [{ port: 8103, targetPort: 8103 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-print-vendor
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: mcp-print-vendor }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mcp-print-vendor }
+    spec:
+      containers:
+        - name: server
+          image: prf-backend:local
+          command: ["python", "-m", "app.mcp_servers.print_vendor.server"]
+          ports: [{ containerPort: 8103 }]
+          readinessProbe:
+            tcpSocket: { port: 8103 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }

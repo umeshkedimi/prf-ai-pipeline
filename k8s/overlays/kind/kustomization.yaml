@@ -1,0 +1,85 @@
+# Everything in this overlay exists because the cluster is kind. Nothing here
+# would survive a move to EKS -- which is the point: it is all in one place.
+#
+# An overlays/eks/ would replace these with ECR image references, an ALB Ingress
+# instead of NodePorts, a gp3 StorageClass, an IRSA-annotated ServiceAccount,
+# and an in-cluster (or Bedrock-backed) model endpoint. The base is untouched
+# either way.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: prf
+
+resources:
+  - ../../base
+
+patches:
+  # kind nodes run their own containerd, separate from the Docker daemon that
+  # built the image. `kind load docker-image` copies it in; Never then stops
+  # kubelet trying to pull a tag that exists in no registry, which is otherwise
+  # an immediate ImagePullBackOff.
+  - target:
+      kind: Deployment
+      name: "(api|celery-worker|mcp-.*)"
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  - target:
+      kind: Job
+      name: prf-migrate
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+  # kind has no cloud provider, so type: LoadBalancer would sit in <pending>
+  # forever. NodePort + the extraPortMappings in kind-cluster.yaml is the
+  # equivalent, and the node port numbers here must match that file.
+  - target: { kind: Service, name: api }
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080
+  - target: { kind: Service, name: grafana }
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30300
+  - target: { kind: Service, name: jaeger }
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30686
+  - target: { kind: Service, name: prometheus }
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30090
+
+  # Ollama runs as a brew service on the host, not in the cluster. Docker
+  # Desktop resolves host.docker.internal inside kind's node containers, so the
+  # litellm pod can reach it. Only the proxy needs this -- the pipeline pods
+  # talk to litellm, never to a model backend directly.
+  #
+  # A patch rather than a configMapGenerator with behavior: merge, because
+  # prf-config is declared as a plain resource in the base. Merge semantics only
+  # apply between generators; against a resource it silently produces a second,
+  # conflicting ConfigMap.
+  - target: { kind: ConfigMap, name: prf-config }
+    patch: |
+      - op: replace
+        path: /data/OLLAMA_BASE_URL
+        value: http://host.docker.internal:11434

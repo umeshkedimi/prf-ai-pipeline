@@ -1,0 +1,30 @@
+# Shared letter storage: celery-worker's generate_pdf writes here, the API reads
+# it back for GET /workflow/{id}/pdf.
+#
+# THIS IS THE ONE PIECE THAT DOES NOT PORT CLEANLY TO A MULTI-NODE CLUSTER, and
+# it is worth understanding rather than papering over.
+#
+# ReadWriteOnce means one *node*, not one pod -- so on single-node kind, api and
+# celery-worker both mount it happily. On EKS with more than one node the
+# scheduler can put them on different nodes and the second pod hangs
+# indefinitely in ContainerCreating. An EBS volume is zonal and single-attach;
+# it cannot satisfy this.
+#
+# The real fixes, in ascending order of correctness:
+#   1. EFS via the EFS CSI driver -- genuine ReadWriteMany, minimal code change.
+#   2. Object storage (S3) with the API issuing presigned URLs -- no shared
+#      filesystem at all, which is the answer that actually belongs in a
+#      cloud-native design.
+#
+# Left as RWO here because pretending otherwise would make the manifests look
+# more portable than they are, and (2) is an application change, not a
+# manifest change -- out of scope for this session by design.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prf-storage
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

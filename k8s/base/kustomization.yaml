@@ -1,0 +1,58 @@
+# Cloud-neutral base. Nothing here names kind, Docker Desktop, or AWS.
+#
+# Environment-specific concerns -- how images are pulled, how services are
+# exposed, which StorageClass backs a PVC, where Ollama lives -- are all
+# deliberately absent and belong to an overlay. That is what makes an
+# overlays/eks/ possible later without editing a single file in this directory.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: prf
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - storage.yaml
+  - postgres.yaml
+  - redis.yaml
+  - mcp-servers.yaml
+  - litellm.yaml
+  - observability.yaml
+  - grafana.yaml
+  - api.yaml
+  - celery-worker.yaml
+  - migrate-job.yaml
+
+# includeSelectors: true reproduces the deprecated commonLabels behaviour
+# exactly. It matters: a Deployment's selector is immutable, so dropping the
+# label from selectors on an already-applied cluster fails the next apply
+# outright rather than degrading quietly.
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: prf-ai-pipeline
+
+# Generated from the repo's own config files rather than copies, so the cluster
+# and docker-compose cannot drift. Requires --load-restrictor LoadRestrictionsNone
+# because the sources sit outside this directory; see k8s/README.md.
+configMapGenerator:
+  - name: litellm-config
+    files:
+      - config.yaml=../../litellm/config.yaml
+  - name: grafana-datasources
+    files:
+      - datasources.yml=../../observability/grafana/provisioning/datasources/datasources.yml
+  - name: grafana-dashboards-provider
+    files:
+      - dashboards.yml=../../observability/grafana/provisioning/dashboards/dashboards.yml
+  - name: grafana-dashboards
+    files:
+      - pipeline.json=../../observability/grafana/dashboards/pipeline.json
+
+generatorOptions:
+  # Without this, kustomize appends a content hash to generated ConfigMap names
+  # (litellm-config-7c2bf9k4d8) so that changing a config file forces a pod
+  # restart -- genuinely useful, but the Deployments above reference these by
+  # fixed name. Kept simple; the trade is that editing litellm/config.yaml needs
+  # an explicit `kubectl rollout restart`.
+  disableNameSuffixHash: true

@@ -1,0 +1,84 @@
+# StatefulSet rather than Deployment: Postgres owns durable state, needs a
+# stable network identity, and must never have two replicas writing the same
+# volume. A Deployment's rolling update would happily start a second pod against
+# the same PVC -- corrupting the database -- which is exactly the distinction
+# StatefulSet exists to enforce.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  # Headless (clusterIP: None): DNS resolves straight to the pod IP rather than
+  # load-balancing across replicas. Required for a StatefulSet's stable
+  # per-pod identity, and correct here regardless -- there is exactly one writer.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          env:
+            - name: POSTGRES_USER
+              value: prf
+            - name: POSTGRES_PASSWORD
+              value: prf
+            - name: POSTGRES_DB
+              value: prf_ai_pipeline
+            # The official image refuses to initialise into a non-empty
+            # directory, and a PVC arrives with a lost+found. Initialising into
+            # a subdirectory is the standard way around it.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "prf", "-d", "prf_ai_pipeline"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "prf", "-d", "prf_ai_pipeline"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+        # No storageClassName: the cluster's default is used. That is
+        # deliberate portability -- local-path on kind, gp3 on EKS, set by an
+        # overlay rather than hardcoded here.

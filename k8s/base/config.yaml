@@ -1,0 +1,55 @@
+# Non-secret configuration shared by api, celery-worker and the migration Job.
+#
+# The service names below (postgres, redis, mcp-crm, ...) are Kubernetes DNS
+# names, resolved by CoreDNS as <service>.<namespace>.svc.cluster.local and
+# shortened to <service> within the same namespace. This is the direct
+# equivalent of docker-compose's service-name networking -- one of the reasons
+# the app needed no code change to run here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prf-config
+data:
+  DATABASE_URL: postgresql+asyncpg://prf:prf@postgres:5432/prf_ai_pipeline
+  DATABASE_URL_SYNC: postgresql+psycopg://prf:prf@postgres:5432/prf_ai_pipeline
+  CHECKPOINTER_DATABASE_URL: postgresql://prf:prf@postgres:5432/prf_ai_pipeline
+
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+  MCP_CRM_URL: http://mcp-crm:8100/mcp
+  MCP_ADDRESS_URL: http://mcp-address:8101/mcp
+  MCP_COMPLIANCE_URL: http://mcp-compliance:8102/mcp
+  MCP_PRINT_VENDOR_URL: http://mcp-print-vendor:8103/mcp
+
+  LLM_PROVIDER: litellm
+  LLM_MODEL: pipeline
+  JUDGE_PROVIDER: litellm
+  JUDGE_MODEL: judge
+  LITELLM_BASE_URL: http://litellm:4000/v1
+  # Base assumes Ollama runs in-cluster as a Service named "ollama". No overlay
+  # currently satisfies that -- kind patches this to the host address instead --
+  # but the base must name *some* cluster-internal default rather than encode a
+  # local-development escape hatch.
+  OLLAMA_BASE_URL: http://ollama:11434
+
+  EMBEDDING_PROVIDER: openai
+  EMBEDDING_MODEL: text-embedding-3-small
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+  CELERY_METRICS_PORT: "9100"
+  CORS_ALLOWED_ORIGINS: http://localhost:5173
+  LOG_LEVEL: INFO
+# NOTE: the prf-api-keys Secret is deliberately NOT defined here.
+#
+# It started as a committed placeholder with empty values, which was wrong in a
+# way only a second apply revealed: `kubectl apply` faithfully restored the
+# empty placeholder over the real keys, silently breaking every pod that had
+# been working. A secret that lives in the manifests is a secret that gets
+# clobbered on every deploy.
+#
+# It is created out-of-band instead (see k8s/README.md), so it is both absent
+# from git and untouched by re-applies. On EKS this is the seam where External
+# Secrets Operator or the Secrets Store CSI driver would pull from AWS Secrets
+# Manager -- same boundary, real implementation.

@@ -1,0 +1,42 @@
+# Schema migration + seed, as a Job rather than an initContainer on the API.
+#
+# The distinction matters: an initContainer runs once per *pod*, so scaling the
+# API to 3 replicas would run migrations three times concurrently. Alembic is
+# not safe under that. A Job runs once per *apply*, which is the actual
+# semantics wanted.
+#
+# Idempotent by construction -- `alembic upgrade head` is a no-op on an
+# up-to-date schema and seed_db.py upserts -- so re-running after a
+# `kubectl delete job` is safe.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prf-migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: prf-backend:local
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "waiting for postgres..."
+              until python -c "import socket;socket.create_connection(('postgres',5432),2)" 2>/dev/null; do sleep 2; done
+              alembic upgrade head
+              python scripts/seed_db.py
+              # Also idempotent, and required for the RAG retrieval that
+              # personalize_letter depends on -- a cluster with a migrated,
+              # seeded database but no embedded corpus looks healthy and then
+              # drafts ungrounded letters.
+              python scripts/ingest_knowledge.py
+          envFrom:
+            - configMapRef: { name: prf-config }
+            - secretRef: { name: prf-api-keys }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }

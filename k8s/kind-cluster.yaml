@@ -1,0 +1,36 @@
+# kind cluster definition for local verification of the manifests in k8s/.
+#
+#   kind create cluster --config k8s/kind-cluster.yaml
+#
+# Two control-plane-adjacent facts worth knowing, because they explain most of
+# what looks strange in overlays/kind:
+#
+# 1. Each "node" here is a Docker container running its own containerd. That
+#    containerd is NOT your Docker daemon, so locally-built images are invisible
+#    to the cluster until `kind load docker-image` copies them in -- which is
+#    why the kind overlay pins imagePullPolicy: Never.
+# 2. kind has no cloud provider, so `type: LoadBalancer` services would hang in
+#    <pending> forever. The overlay uses NodePort plus the port mappings below
+#    instead.
+#
+# Host ports are deliberately NOT 8000/3000/16686: docker-compose already binds
+# those, and the point of a disposable cluster is that standing it up shouldn't
+# disturb a working stack. Both can run at once.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: prf
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080 # api
+        hostPort: 18000
+        protocol: TCP
+      - containerPort: 30300 # grafana
+        hostPort: 13000
+        protocol: TCP
+      - containerPort: 30686 # jaeger UI
+        hostPort: 16687
+        protocol: TCP
+      - containerPort: 30090 # prometheus
+        hostPort: 19090
+        protocol: TCP

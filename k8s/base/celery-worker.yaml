@@ -1,0 +1,80 @@
+# The Celery worker -- where every LLM call and the whole LangGraph pipeline
+# actually runs. The API only enqueues.
+#
+# A Service exists despite nothing calling the worker: Prometheus scrapes
+# :9100. A headless Service would be the tidier choice for a scrape target, but
+# ClusterIP keeps it symmetrical with the static target in prometheus-config.
+apiVersion: v1
+kind: Service
+metadata:
+  name: celery-worker
+  labels: { app.kubernetes.io/name: celery-worker }
+spec:
+  selector: { app.kubernetes.io/name: celery-worker }
+  ports: [{ name: metrics, port: 9100, targetPort: 9100 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: the default would briefly run old and new pods
+  # together, and both would try to mount the same ReadWriteOnce PVC and bind
+  # :9100. More importantly prometheus_client's registry is not fork- or
+  # replica-aware (see workers/metrics.py), so two workers silently
+  # under-report. Same reasoning that pinned --concurrency=1 in compose.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app.kubernetes.io/name: celery-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: celery-worker }
+    spec:
+      containers:
+        - name: worker
+          image: prf-backend:local
+          command:
+            - celery
+            - -A
+            - app.workers.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=1
+          envFrom:
+            - configMapRef: { name: prf-config }
+            - secretRef: { name: prf-api-keys }
+          ports: [{ containerPort: 9100, name: metrics }]
+          # No HTTP endpoint to probe, so liveness is "can this worker answer a
+          # control-plane ping over the broker". A worker whose event loop is
+          # wedged fails this while a bare process check would not notice.
+          # Wrapped in sh -c on purpose: an exec probe runs the command
+          # directly with no shell, so a bare $(hostname) is passed through as a
+          # literal and the probe asks for a worker node that cannot exist.
+          # That fails on a perfectly healthy worker and kubelet restarts it --
+          # observed live before this wrapper was added.
+          #
+          # Targeting this pod's own node (-d) rather than a broadcast ping
+          # matters: a broadcast succeeds as long as *any* worker answers, so a
+          # dead pod in a multi-replica deployment would look healthy.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec celery -A app.workers.celery_app inspect ping -d "celery@$(hostname)"
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: prf-storage
