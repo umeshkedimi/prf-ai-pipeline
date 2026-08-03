@@ -26,6 +26,7 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Getting started](#getting-started)
 - [Frontend (review dashboard)](#frontend-review-dashboard)
 - [Observability](#observability)
+- [LLM routing and cost control](#llm-routing-and-cost-control)
 - [Demos](#demos)
 - [The seed dataset](#the-seed-dataset)
 - [Tests and CI](#tests-and-ci)
@@ -71,6 +72,8 @@ flowchart LR
   end
 
   GRAPH <-->|"tool calls"| MCP
+  GRAPH -->|"optional —<br/>LLM_PROVIDER=litellm"| LLM["LiteLLM proxy :4000<br/>budget · rate caps · fallbacks"]
+  LLM --> VENDOR["Ollama · Gemini · Claude"]
   GRAPH <-->|"semantic search ·<br/>checkpoints · audit log"| PG[("PostgreSQL<br/>+ pgvector")]
   GRAPH -.->|"interrupt() →<br/>awaiting_review"| API
 
@@ -345,8 +348,10 @@ All configuration is environment-driven via `pydantic-settings` (`core/config.py
 
 | Variable | Default (`.env.example`) | Notes |
 |---|---|---|
-| `LLM_PROVIDER` / `LLM_MODEL` | `ollama` / `qwen2.5:14b` | Pipeline model. `google_genai` and `anthropic` also wired |
+| `LLM_PROVIDER` / `LLM_MODEL` | `ollama` / `qwen2.5:14b` | Pipeline model. `google_genai`, `anthropic` and `litellm` also wired |
 | `JUDGE_PROVIDER` / `JUDGE_MODEL` | `ollama` / `llama3.1:8b` | Eval judge — deliberately a *different* model from the one under evaluation |
+| `LITELLM_BASE_URL` / `LITELLM_API_KEY` | `http://localhost:4000/v1` / `sk-prf-local` | Only read when the provider is `litellm`. Compose overrides the URL with the service name. A blank value normalises back to the default rather than binding `""` |
+| `LITELLM_MASTER_KEY` | `sk-prf-local` | Read by the proxy container itself; it rejects unauthenticated calls |
 | `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | `openai` / `text-embedding-3-small` | 1536-dim. Changing dimension requires a migration on the `Vector` column |
 | `OLLAMA_BASE_URL` | unset | Only needed for the dockerized services; compose sets `http://host.docker.internal:11434` |
 | `OPENAI_API_KEY` | — | **Required at runtime**, not just at ingest — see [Known limitations](#known-limitations) |
@@ -414,6 +419,7 @@ The `pgdata` volume persists, so seeding and ingestion are one-time — subseque
 | PostgreSQL | 5432 | + pgvector |
 | Redis | 6379 | Celery broker |
 | MCP: CRM / Address / Compliance / Print Vendor | 8100–8103 | streamable-HTTP |
+| LiteLLM proxy | 4000 | OpenAI-compatible; `/v1/models` lists the served aliases |
 | Celery metrics | 9100 | Prometheus scrape target |
 | Jaeger UI | 16686 | traces |
 | Prometheus | 9090 | |
@@ -472,6 +478,41 @@ A starter Grafana dashboard is provisioned automatically: runs by terminal statu
 
 1. `main.py` imported the API router — which transitively imports `workers/celery_app.py` — *before* calling its own `configure_tracing(service_name="prf-api")`. The worker's module-level `configure_tracing()` therefore ran first and won the `_configured` guard, so every span the API emitted was permanently mislabeled `prf-celery-worker`. Caught by noticing Jaeger listed one service where there should have been two.
 2. Celery's default prefork pool forked ~17 processes, each racing to bind `:9100` — and `prometheus_client`'s registry isn't fork-aware regardless, so only the process that won the bind would ever be scraped, silently dropping most executions' metrics. Fixed by pinning `--concurrency=1` (also this demo's real concurrency need) and making the bind defensive so a future concurrency bump fails loudly in logs instead of underreporting silently.
+
+## LLM routing and cost control
+
+Two of this project's more expensive failures happened because nothing sat between the process and the vendor: a prepaid Anthropic balance drained inside a single eval sweep, and a Gemini free-tier sweep that died mid-run in 58 consecutive HTTP 429s. Both were invisible until the money or the quota was already gone. A sweep's cost is `(LLM calls per run) × (cases) × (runs per case) × (re-runs while debugging)`, and only the first of those four is visible from inside the code.
+
+A [LiteLLM](https://github.com/BerriAI/litellm) proxy (`litellm/config.yaml`, port 4000) is that missing layer — one place that knows what a call costs and can refuse to keep spending.
+
+```bash
+LLM_PROVIDER=litellm LLM_MODEL=pipeline \
+JUDGE_PROVIDER=litellm JUDGE_MODEL=judge \
+docker compose up -d
+```
+
+**`LLM_MODEL` names an alias, not a vendor model.** `pipeline` and `judge` are defined in `litellm/config.yaml`, so *which vendor answers* becomes a config decision rather than a code one — and the pipeline/judge separation the eval framework depends on survives the indirection as two distinct aliases.
+
+**The proxy is OpenAI-compatible, so the client is a plain OpenAI client pointed at a different host.** `core/llm.py` keeps `litellm` as the provider name and translates to `openai` only as the wire protocol. Conflating the two would mean either a redundant dependency or a config value that lies about where calls actually go. This is why adding the provider needed no new Python dependency.
+
+What the proxy enforces, verified live:
+
+| | |
+|---|---|
+| **Auth** | Unauthenticated calls get `401`; the master key is required |
+| **Model allowlist** | `model=gpt-4o` gets `400` — only the four configured aliases are reachable, so a typo can't silently bill a different model |
+| **Rate caps** | Per-deployment `rpm`. Gemini's documented 20-request/day free tier is encoded as `rpm: 5`, so the proxy refuses the call rather than the vendor 429ing it and the sweep burning retries on the error |
+| **Budget** | In-memory `max_budget: 10.0` over 30d — a circuit breaker sized against the ~$2 measured cost of one full `--include-expensive` sweep |
+| **Transport retries** | `num_retries: 2`, deliberately separate from the schema-level retry in `ainvoke_structured` — that one re-asks the model when output fails Pydantic validation, which no proxy can see |
+
+**Deliberately not used: virtual keys and per-team budgets.** Those require the proxy to own a Postgres schema — a second stateful service for a demo with exactly one caller. The in-memory caps above need no database and address the failure actually on record.
+
+**Opt-in, not the default.** The committed eval baseline was recorded against direct Ollama; silently changing what the pipeline talks to would make that baseline unattributable, which is the same provenance discipline the `-dirty` git-SHA marker exists to enforce.
+
+Two things that had to survive the extra hop, both confirmed against a live d-0001 run completing through `pdf_generation`:
+
+- **Tool-calling.** `gather_context`'s loop depends on it. The config uses `ollama_chat/` rather than `ollama/` specifically because the former routes through Ollama's chat-completions API, which is the one with working tool-call support.
+- **Token accounting.** `agent_audit_log` still records real per-agent input/output tokens through the proxy — with `pdf_generation` correctly showing none, since it makes no LLM call at all.
 
 ## Demos
 
