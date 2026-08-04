@@ -17,11 +17,15 @@ def current_git_sha() -> str | None:
 
     A bare `HEAD` is not enough: an eval sweep is usually run *while iterating*,
     so the code that actually produced the scores is the working tree, not the
-    last commit. The committed baseline is the proof — it reports `pdf_generation`
-    metrics against a SHA whose tree has no `pdf_generation` suite in it, because
-    that sweep ran before the phase was committed. A `-dirty` suffix keeps the
-    pointer honest about that rather than silently attributing scores to a commit
-    that cannot reproduce them.
+    last commit. A `-dirty` suffix keeps the pointer honest about that rather
+    than silently attributing scores to a commit that cannot reproduce them.
+
+    The motivating case, stated in the past tense because the fix closed it:
+    a baseline once reported `pdf_generation` metrics against a SHA whose tree
+    contained no `pdf_generation` suite, that sweep having run before the phase
+    was committed. The current baseline was deliberately re-swept on a clean
+    tree, so its SHA does reproduce it — don't read the file expecting to find
+    the defect still there.
     """
     try:
         result = subprocess.run(

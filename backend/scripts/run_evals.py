@@ -12,8 +12,10 @@ Usage:
   uv run python scripts/run_evals.py --runs 5 --set-baseline  # record a new baseline
   uv run python scripts/run_evals.py --llm-model <cheap-id>   # sweep on a cheap model
 
-Requires the stack up (postgres, mcp-crm, mcp-address), the DB seeded, and the
-knowledge corpus ingested.
+Requires the DB seeded, the knowledge corpus ingested, and the stack up —
+postgres plus all four MCP servers (crm, address, compliance, print-vendor).
+The compliance and pdf_generation suites need the latter two, and trajectory
+exercises every one of them, so a partial stack fails partway into a sweep.
 """
 
 import argparse

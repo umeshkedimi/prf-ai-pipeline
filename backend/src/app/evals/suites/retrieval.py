@@ -16,8 +16,16 @@ from app.rag.retriever import retrieve
 RETRIEVE_K = 5
 
 # Each case: a question a fundraiser might genuinely need answered, paired with
-# the document that actually contains the answer. Spans all five corpus docs so
-# a regression isolated to one document still surfaces.
+# the document that actually contains the answer. Spread across documents so a
+# regression isolated to one still surfaces.
+#
+# Coverage gap, named rather than left to be discovered: these cases span five
+# of the corpus's six documents. `compliance_guidelines.md` (Phase 5) has no
+# case, so the stated rationale above does not hold for it — and it is the one
+# `review_letter_compliance` retrieves against, which makes it the worst one to
+# be blind to. Closing that means an eleventh case, which moves recall@1/@3 and
+# mrr and therefore needs its own sweep to re-baseline; deliberately not
+# bundled into a documentation fix.
 _CASES: list[tuple[str, str, str]] = [
     (
         "cost-of-care",
