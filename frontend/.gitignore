@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Local env. Also covered by the repo root's .gitignore, but repeated here so
+# this directory protects itself if it is ever moved or vendored elsewhere.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
