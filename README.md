@@ -141,8 +141,10 @@ These are the load-bearing decisions. Everything else follows from them.
 │   └── tests/                  unit/ (offline, mocked) + integration/ (live stack)
 ├── frontend/                   Vite + React + TypeScript review dashboard
 ├── observability/              Prometheus config + Grafana provisioning/dashboard
+├── litellm/                    proxy config — model aliases, budget + rpm caps
+├── k8s/                        Kustomize base + overlays/kind
 ├── .github/workflows/ci.yml    ruff check + offline unit suite
-└── docker-compose.yml          11 services
+└── docker-compose.yml          12 services
 ```
 
 Every agent directory follows the same shape, so a reviewer who reads one can navigate all seven. Where an agent has deterministic logic, it lives in its own module (`rfm.py`, `rules.py`, `render.py`) rather than inside `agent.py` — that separation is the determinism boundary made visible in the file tree.
@@ -430,7 +432,7 @@ The `pgdata` volume persists, so seeding and ingestion are one-time — subseque
 
 ```bash
 cd backend
-uv run pytest                              # unit, offline, ~0.6s
+uv run pytest                              # unit, offline, ~1.3s
 uv run pytest -m integration               # real stack + live LLM, ~4min
 uv run ruff check .
 
@@ -734,7 +736,7 @@ Every donor clearing all three gates continues through `personalize_letter`, `re
 
 ```bash
 cd backend
-uv run pytest                 # 116 unit tests, mocked LLM + MCP + retriever (~0.6s)
+uv run pytest                 # 131 unit tests, mocked LLM + MCP + retriever (~1.3s)
 uv run pytest -m integration  # real stack: live LLM + embeddings, MCP servers, Postgres (~4min)
 ```
 
