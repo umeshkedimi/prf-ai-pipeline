@@ -15,9 +15,15 @@ class WorkflowRun(Base):
     status values: pending | running | awaiting_review | completed | needs_review | failed.
     `awaiting_review` means the graph is genuinely paused mid-execution on a real
     LangGraph interrupt() and cannot proceed without a decision via POST
-    .../review (see pending_review). `needs_review` (from Phase 1) is a purely
-    advisory terminal flag — the graph already reached END, nothing is blocked,
-    it just means a low-confidence verification outcome is worth a human glance.
+    .../review (see pending_review). `needs_review` is a purely advisory
+    terminal flag — the graph already reached END, nothing is blocked, it just
+    means the outcome is worth a human glance. Which stage set it is decided by
+    `workers/tasks.py:_derive_terminal_status`, from whichever stage the run
+    actually terminated at: a below-threshold confidence at verification,
+    address, recommendation, personalization, or compliance — or, the case
+    worth knowing about, a run that reached `generate_pdf` while compliance
+    returned `approved: false`, so a letter that got printed despite a failed
+    risk review surfaces in the queue instead of reading as unremarkable.
     """
 
     __tablename__ = "workflow_runs"
