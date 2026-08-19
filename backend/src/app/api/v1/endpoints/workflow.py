@@ -17,10 +17,13 @@ from app.schemas.workflow import (
     ReviewHistoryEntry,
     WorkflowRunCreate,
     WorkflowRunRead,
-    WorkflowReviewSummary,
+    WorkflowRunSummary,
 )
+
 from app.workers.tasks import resume_workflow_after_review
 from app.workers.tasks import run_workflow as run_workflow_task
+
+RunStatus = Literal["pending", "running", "awaiting_review", "completed", "needs_review", "failed"]
 
 router = APIRouter()
 
@@ -41,6 +44,46 @@ async def _resolve_donor_id(session: AsyncSession, donor_id: str) -> uuid.UUID:
     if donor is None:
         raise HTTPException(status_code=404, detail=f"donor {donor_id!r} not found")
     return donor.id
+
+
+async def _list_run_summaries(
+    session: AsyncSession,
+    *,
+    statuses: list[str] | None,
+    limit: int,
+    offset: int,
+    newest_first: bool,
+) -> list[WorkflowRunSummary]:
+    """Shared by GET /workflow/reviews (oldest-first, so a FIFO queue triages
+    correctly) and GET /workflow/runs (newest-first, the natural default for
+    a history browser). statuses=None means no filter at all."""
+    stmt = (
+        select(WorkflowRun, Donor, Campaign)
+        .join(Donor, WorkflowRun.donor_id == Donor.id)
+        .outerjoin(Campaign, WorkflowRun.campaign_id == Campaign.id)
+    )
+    if statuses:
+        stmt = stmt.where(WorkflowRun.status.in_(statuses))
+    order_col = WorkflowRun.created_at.desc() if newest_first else WorkflowRun.created_at.asc()
+    stmt = stmt.order_by(order_col).limit(limit).offset(offset)
+
+    result = await session.execute(stmt)
+    return [
+        WorkflowRunSummary(
+            id=run.id,
+            donor_id=run.donor_id,
+            donor_name=f"{donor.first_name} {donor.last_name}",
+            donor_external_id=donor.external_id,
+            campaign_id=run.campaign_id,
+            campaign_name=campaign.name if campaign else None,
+            status=run.status,
+            current_agent=run.current_agent,
+            confidence=run.confidence,
+            pending_review=run.pending_review,
+            created_at=run.created_at,
+        )
+        for run, donor, campaign in result.all()
+    ]
 
 
 @router.post("/workflow/run", response_model=WorkflowRunRead, status_code=202)
@@ -94,7 +137,7 @@ async def run_workflow_batch(
     return results
 
 
-@router.get("/workflow/reviews", response_model=list[WorkflowReviewSummary])
+@router.get("/workflow/reviews", response_model=list[WorkflowRunSummary])
 async def list_reviews(
     status: Literal["awaiting_review", "needs_review"] | None = Query(
         None, description="Restrict to one queue; omit for both"
@@ -103,42 +146,33 @@ async def list_reviews(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> list[WorkflowReviewSummary]:
+) -> list[WorkflowRunSummary]:
     """Everything a human has reason to look at: `awaiting_review` runs are
     genuinely paused on a LangGraph interrupt() and block on a decision;
     `needs_review` runs already reached END but flagged a low-confidence or
     disapproved outcome for an eventual glance. Declared ahead of
     GET /workflow/{workflow_run_id} so "reviews" doesn't get routed there and
-    fail UUID conversion.
-
-    Joins in donor/campaign name — a reviewer scanning the queue needs to know
-    who they'd be mailing, not a bare donor UUID."""
+    fail UUID conversion. Oldest-first — a queue triages FIFO."""
     statuses = [status] if status else ["awaiting_review", "needs_review"]
-    result = await session.execute(
-        select(WorkflowRun, Donor, Campaign)
-        .join(Donor, WorkflowRun.donor_id == Donor.id)
-        .outerjoin(Campaign, WorkflowRun.campaign_id == Campaign.id)
-        .where(WorkflowRun.status.in_(statuses))
-        .order_by(WorkflowRun.created_at)
-        .limit(limit)
-        .offset(offset)
-    )
-    return [
-        WorkflowReviewSummary(
-            id=run.id,
-            donor_id=run.donor_id,
-            donor_name=f"{donor.first_name} {donor.last_name}",
-            donor_external_id=donor.external_id,
-            campaign_id=run.campaign_id,
-            campaign_name=campaign.name if campaign else None,
-            status=run.status,
-            current_agent=run.current_agent,
-            confidence=run.confidence,
-            pending_review=run.pending_review,
-            created_at=run.created_at,
-        )
-        for run, donor, campaign in result.all()
-    ]
+    return await _list_run_summaries(session, statuses=statuses, limit=limit, offset=offset, newest_first=False)
+
+
+@router.get("/workflow/runs", response_model=list[WorkflowRunSummary])
+async def list_runs(
+    status: RunStatus | None = Query(None, description="Restrict to one status; omit for all"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[WorkflowRunSummary]:
+    """The full run history, any status — unlike /workflow/reviews (which is
+    scoped to what a human needs to act on), this is a general browser, e.g.
+    for finding a `completed` run without knowing its id ahead of time.
+    Declared ahead of GET /workflow/{workflow_run_id} for the same UUID-path
+    reason /workflow/reviews already is. Newest-first, the natural default
+    for a history view."""
+    statuses = [status] if status else None
+    return await _list_run_summaries(session, statuses=statuses, limit=limit, offset=offset, newest_first=True)
 
 
 @router.get("/workflow/{workflow_run_id}", response_model=WorkflowRunRead)

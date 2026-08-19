@@ -88,10 +88,11 @@ class WorkflowRunRead(BaseModel):
     review_history: list[ReviewHistoryEntry] = []
 
 
-class WorkflowReviewSummary(BaseModel):
-    """Lighter-weight row for the GET /workflow/reviews queue listing — a
-    reviewer scanning the queue needs to know who they'd be mailing, not the
-    full run payload WorkflowRunRead carries."""
+class WorkflowRunSummary(BaseModel):
+    """Lighter-weight row shared by GET /workflow/reviews (the review queue)
+    and GET /workflow/runs (the full run history, any status) — a reviewer
+    scanning either list needs to know who they'd be mailing, not the full
+    run payload WorkflowRunRead carries."""
 
     model_config = ConfigDict(from_attributes=True)
 
