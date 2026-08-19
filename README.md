@@ -23,6 +23,7 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Data model](#data-model)
 - [API reference](#api-reference)
 - [Authentication and authorization](#authentication-and-authorization)
+- [CSV donor ingestion](#csv-donor-ingestion)
 - [Configuration reference](#configuration-reference)
 - [Getting started](#getting-started)
 - [Frontend (review dashboard)](#frontend-review-dashboard)
@@ -130,13 +131,14 @@ These are the load-bearing decisions. Everything else follows from them.
 │   │   ├── evals/              harness (types, runner, scorers, report, store)
 │   │   │                       + suites/ (8 suites)
 │   │   ├── workers/            Celery app + tasks + Prometheus metrics
-│   │   ├── api/v1/endpoints/   FastAPI routes (workflow, health)
+│   │   ├── donors/             CSV ingestion (parse, validate, upsert) — Phase 9b
+│   │   ├── api/v1/endpoints/   FastAPI routes (auth, donors, workflow, health)
 │   │   ├── db/models/          SQLAlchemy models
 │   │   ├── schemas/            Pydantic request/response schemas
-│   │   └── core/               config, llm factory, audit, logging, telemetry
+│   │   └── core/               config, llm factory, audit, logging, telemetry, security
 │   ├── knowledge/              markdown corpus ingested into pgvector (6 docs)
-│   ├── alembic/versions/       6 migrations
-│   ├── scripts/                seed_db, ingest_knowledge, run_evals, run_workflow_cli
+│   ├── alembic/versions/       8 migrations
+│   ├── scripts/                seed_db, seed_users, ingest_knowledge, run_evals, run_workflow_cli
 │   ├── evals/results/          baseline.json (committed), latest.json (gitignored)
 │   ├── storage/letters/        generated PDFs (gitignored)
 │   └── tests/                  unit/ (offline, mocked) + integration/ (live stack)
@@ -164,11 +166,11 @@ Built **incrementally, phase by phase**, each phase fully working and demoable b
 | **6** ✅ | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP — no LLM call, purely mechanical assembly and a mocked vendor order |
 | **7** ✅ | Review queue (`GET /workflow/reviews` with donor/campaign names and pagination) + per-run decision history (`review_history`, derived from the audit trail) + routing a disapproved compliance review to `needs_review` + `graph/builder.py` split into named verification/fulfillment units |
 | **8** ✅ | **8a** React review dashboard (`frontend/`). **8b** OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning API, Celery, and every agent node. **8c** CI (`.github/workflows/ci.yml`) — lint + offline unit suite on every push/PR |
-| **9** 🟡 | **9a** ✅ Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** ⬜ CSV donor ingestion, staged (not auto-run) — not started |
+| **9** ✅ | **9a** Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** CSV donor ingestion (`POST /donors/ingest`, admin-only, upserts by `external_id`) staged — never auto-runs — plus `GET /donors/unrun` and `POST /workflow/run/batch` to explicitly trigger runs on staged donors |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
 
-Phases 1–8 plus the evaluation framework are complete; Phase 9 (multi-user auth + CSV ingestion) is in progress — see [Authentication and authorization](#authentication-and-authorization).
+All nine phases plus the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
 
 ## The pipeline graph
 
@@ -307,6 +309,8 @@ Keys are omitted for agents that never ran, so a reviewer sees the whole picture
 | `agent_audit_log` | **One row per agent decision** — input snapshot, output, confidence, reasoning, tool calls, model, latency, `input_tokens`/`output_tokens`. The explainability trail |
 | `knowledge_chunks` | pgvector store — heading-chunked campaign knowledge, 1536-dim, HNSW cosine index. **No PII** |
 | `eval_runs` | Persisted eval history: suite, metrics, `git_sha`, `llm_model`, `judge_model` |
+| `users` | Login accounts — email, hashed password, `admin`/`reviewer` role (Phase 9a) |
+| `donor_imports` | One row per CSV upload — uploader, filename, insert/update/reject counts, full rejected-row detail (Phase 9b) |
 | `checkpoints` (LangGraph) | Durable graph state, dedicated schema — what makes crash/resume real |
 
 **Every node writes to `agent_audit_log`** — this is what `GET /workflow/{id}?verbose=true` exposes. `recommend_ask`, `personalize_letter`, and `review_letter_compliance` additionally record which knowledge chunks were retrieved and their cosine distances, so a reviewer can see exactly what each was grounded in.
@@ -324,7 +328,10 @@ Base path: `/api/v1`. Interactive docs at `http://localhost:8000/docs`.
 | `GET` | `/auth/me` | The authenticated user |
 | `POST` | `/auth/users` | Admin-only. Create a user — `{"email", "full_name", "password", "role"}` |
 | `GET` | `/auth/users` | Admin-only. List all users |
+| `POST` | `/donors/ingest` | Admin-only. Multipart CSV upload — upserts by `external_id`, never starts a run. Returns per-row insert/update/reject counts |
+| `GET` | `/donors/unrun` | Donors with zero workflow runs — the staging list for a batch trigger. Query: `limit` (default 200) |
 | `POST` | `/workflow/run` | Start a run. Body `{"donor_id": "d-0009"}`. Returns `202` + the run record |
+| `POST` | `/workflow/run/batch` | Body `{"donor_ids": [...]}`. Enqueues one run per donor; a bad id is reported per-item, not fatal to the batch |
 | `GET` | `/workflow/reviews` | Review queue — `awaiting_review` + `needs_review` runs, oldest first. Query: `status`, `limit` (default 50), `offset` |
 | `GET` | `/workflow/{id}` | Full run: status, `result`, `pending_review`, `review_history`. Add `?verbose=true` for the audit log |
 | `POST` | `/workflow/{id}/review` | Submit a human decision. Returns `202`; resumes asynchronously via Celery |
@@ -359,7 +366,15 @@ JWT bearer auth (`core/security.py`, `api/deps_auth.py`), added in Phase 9a. Sin
 - **No public self-signup.** `scripts/seed_users.py` creates one dev-only admin (`admin@prf.local` / `changeme123` — rotate before any real deployment); that admin then onboards further users via `POST /auth/users`.
 - **Review attribution can't be spoofed.** `ReviewDecisionCreate.reviewer` still exists on the request schema (kept in sync with `agents/human_review/schemas.py:HumanReviewDecision`, per this project's usual field-parity convention), but the `/workflow/{id}/review` endpoint overwrites it with the authenticated user's email before the decision reaches the graph — verified live by submitting a decision with a forged `reviewer` value in the body and confirming `review_history` recorded the real logged-in user instead.
 
-**Not done, deliberately out of scope for 9a:** password reset/email verification, login rate limiting, refresh tokens (a token just expires and the user logs in again), and the CSV-driven donor ingestion this was originally scoped alongside (Phase 9b, not started — see [Status](#status)).
+**Not done, deliberately out of scope for 9a:** password reset/email verification, login rate limiting, refresh tokens (a token just expires and the user logs in again).
+
+## CSV donor ingestion
+
+`POST /donors/ingest` (Phase 9b, admin-only) uploads a CSV and upserts by `external_id` — insert if new, update in place if it already exists. Only three columns are required: `external_id`, `first_name`, `last_name`; everything else (`email`, `address_line1`, `address_line2`, `city`, `state`, `postal_code`, `country`, `do_not_contact`, `notes`) is allowed to be blank — ingestion isn't stricter than the pipeline itself already is (`d-0007`'s seeded malformed-record scenario exercises exactly this tolerance). A blank cell on an update never overwrites existing data, so a partial re-upload (e.g. a name-only correction file) can't silently erase a field an earlier upload set. Every upload writes one `donor_imports` row — filename, uploader, counts, and the full per-row rejection list — the same attribution pattern 9a built for review decisions, applied to bulk data changes instead of individual decisions.
+
+**Ingestion never starts a run.** That split is deliberate, not an oversight: an uploaded file firing off LLM-calling runs unattended is a failure mode this project has already paid for once — see [LLM routing and cost control](#llm-routing-and-cost-control) for the drained-balance and 58×429 incidents that motivated the LiteLLM proxy's rate caps. `GET /donors/unrun` lists every donor — CSV-imported or seeded, the distinction isn't tracked — with zero `workflow_runs` rows, and `POST /workflow/run/batch` (body `{"donor_ids": [...]}`) enqueues one run per selected donor through the exact same path `POST /workflow/run` already uses, reporting failures per-donor so one bad id doesn't sink the rest.
+
+The dashboard's **Donors** tab wraps both: an admin-only upload form showing the insert/update/reject counts, and a checkbox list of unrun donors with a "Start N runs" button open to both roles — triggering a run is a normal reviewer action, uploading the dataset is not.
 
 ## Configuration reference
 
@@ -453,7 +468,7 @@ The `pgdata` volume persists, so seeding and ingestion are one-time — subseque
 
 ```bash
 cd backend
-uv run pytest                              # unit, offline, ~1.3s
+uv run pytest                              # unit, offline, ~2.3s
 uv run pytest -m integration               # real stack + live LLM, ~4min
 uv run ruff check .
 
@@ -464,7 +479,9 @@ uv run python scripts/run_evals.py --include-expensive # + trajectory
 
 ## Frontend (review dashboard)
 
-A minimal Vite + React + TypeScript app consuming the review-queue API — no framework beyond React itself, no client-side router (the whole app is a login screen, a queue view, and a run-detail view, toggled by component state), no CSS library, no state management beyond `useState`. It's a UI for reviewing paused/flagged runs and submitting decisions, not a general admin panel.
+A minimal Vite + React + TypeScript app consuming the review-queue API — no framework beyond React itself, no client-side router (the whole app is a login screen, a queue view, a run-detail view, and a Donors view, toggled by component state), no CSS library, no state management beyond `useState`. It's a UI for reviewing paused/flagged runs and staging/triggering donor runs, not a general admin panel.
+
+The **Donors** tab (`DonorImport.tsx`, Phase 9b) is a CSV upload form (admin-only) plus a checkbox list of never-run donors with a "Start N runs" button — open to both roles, since triggering a run is a normal reviewer action even though uploading the donor dataset isn't.
 
 `Login.tsx` gates the whole app: `App.tsx` checks for a stored token via `GET /auth/me` on load and renders the login form until that succeeds. The token lives in `localStorage`, is attached as a `Bearer` header on every request (`api.ts`), and any `401` response clears it — an expired session drops back to login on the next action rather than failing silently.
 
@@ -771,7 +788,7 @@ Every donor clearing all three gates continues through `personalize_letter`, `re
 
 ```bash
 cd backend
-uv run pytest                 # 131 unit tests, mocked LLM + MCP + retriever (~1.3s)
+uv run pytest                 # 150 unit tests, mocked LLM + MCP + retriever (~2.3s)
 uv run pytest -m integration  # real stack: live LLM + embeddings, MCP servers, Postgres (~4min)
 ```
 
@@ -875,7 +892,7 @@ Decisions worth defending, with the counter-argument stated rather than hidden:
 Stated plainly, because a portfolio piece that hides its edges is less useful than one that names them:
 
 - **Auth is single-org RBAC, not multi-tenant.** Phase 9a (see [Authentication and authorization](#authentication-and-authorization)) added JWT login and two roles, but there is no per-tenant data isolation — every user sees every donor/campaign/run. True multi-tenancy (isolated organizations) was scoped out deliberately as a bigger data-model change than this internal tool needs.
-- **CSV donor ingestion (Phase 9b) is not built yet.** Donors currently arrive only via `seed_db.py` or the CRM MCP server, not a bulk upload path. Scoped as staged-not-auto-run — an upload should never silently fire off LLM-calling runs unattended — but not started.
+- **Donor import provenance isn't tracked per-donor.** `donor_imports` records who uploaded a CSV and when, but a `Donor` row itself doesn't say whether it came from that upload, `seed_db.py`, or the CRM MCP server — `GET /donors/unrun` deliberately shows all never-run donors regardless of source, which was the simpler and sufficient design, but it does mean there's no "donors from this specific upload" view.
 - **All external integrations are mocked.** CRM, address verification, compliance registration, and the print vendor return synthetic fixtures. The **MCP protocol layer is real** — swapping in a live vendor is a URL change — but no real address has ever been verified and no real letter has ever been mailed.
 - **Embeddings require `OPENAI_API_KEY` even on the otherwise key-free Ollama configuration**, because retrieval embeds the query at runtime. Moving to local embeddings requires re-ingesting the corpus, and any dimension other than 1536 needs a migration on the `Vector` column.
 - **`core/config.py`'s in-code defaults still name `google_genai`**, while `.env.example` and the eval baseline use Ollama. A copied `.env` wins, so this only affects running with no `.env` at all.
