@@ -82,6 +82,14 @@ export function startWorkflowRun(payload: WorkflowRunCreate): Promise<WorkflowRu
   });
 }
 
-export function pdfUrl(id: string): string {
-  return `${BASE_URL}/workflow/${id}/pdf`;
+export async function fetchWorkflowPdf(id: string): Promise<Blob> {
+  const token = getToken();
+  const response = await fetch(`${BASE_URL}/workflow/${id}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    if (response.status === 401) clearToken();
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.blob();
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getWorkflowRun, pdfUrl, submitReview } from "../api";
+import { fetchWorkflowPdf, getWorkflowRun, submitReview } from "../api";
 import type { WorkflowRunRead } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { ReviewDecisionForm } from "./ReviewDecisionForm";
@@ -11,6 +11,17 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  const handleViewPdf = async () => {
+    setPdfError(null);
+    try {
+      const blob = await fetchWorkflowPdf(id);
+      window.open(URL.createObjectURL(blob), "_blank", "noreferrer");
+    } catch (err) {
+      setPdfError((err as Error).message);
+    }
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -56,9 +67,10 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
         <p>
           Letter generated — ref <strong>{pdfResult.reference}</strong>, tracking{" "}
           {pdfResult.tracking_number} ({pdfResult.postage_class}).{" "}
-          <a href={pdfUrl(run.id)} target="_blank" rel="noreferrer">
+          <button type="button" onClick={handleViewPdf}>
             View PDF
-          </a>
+          </button>
+          {pdfError && <span style={{ color: "#b91c1c", marginLeft: 8 }}>{pdfError}</span>}
         </p>
       )}
 
