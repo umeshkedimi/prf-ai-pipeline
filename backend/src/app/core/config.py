@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0
 
+    # Dev-only default so a bare `uv run` works with no .env at all -- rotate
+    # before this is ever exposed beyond a local machine. HS256 keeps the auth
+    # layer dependency-free (no asymmetric key management for a single-service
+    # demo); token lifetime is a workday, not a session, since this is an
+    # internal ops tool reviewers keep open, not a public-facing app.
+    jwt_secret_key: str = "dev-only-change-before-any-real-deployment"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60 * 8
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -5,6 +5,7 @@ from app.db.models.donor import Donor
 from app.db.models.eval_run import EvalRun
 from app.db.models.knowledge_chunk import KnowledgeChunk
 from app.db.models.suppression import SuppressionListEntry
+from app.db.models.user import User
 from app.db.models.workflow_run import WorkflowRun
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "EvalRun",
     "KnowledgeChunk",
     "SuppressionListEntry",
+    "User",
     "WorkflowRun",
 ]

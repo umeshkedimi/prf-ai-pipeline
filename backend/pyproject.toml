@@ -37,6 +37,8 @@ dependencies = [
     "opentelemetry-instrumentation-celery>=0.65b0",
     "prometheus-client>=0.26.0",
     "prometheus-fastapi-instrumentator>=8.0.2",
+    "bcrypt>=4.2",
+    "pyjwt>=2.9",
 ]
 
 [project.optional-dependencies]
