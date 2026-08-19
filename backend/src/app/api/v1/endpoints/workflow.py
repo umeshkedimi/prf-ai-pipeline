@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.api.deps_auth import get_current_user
 from app.db.models import AgentAuditLog, Campaign, Donor, User, WorkflowRun
+from app.schemas.donors import WorkflowRunBatchCreate, WorkflowRunBatchItem
 from app.schemas.workflow import (
     AuditLogEntry,
     ReviewDecisionCreate,
@@ -61,6 +62,36 @@ async def run_workflow(
 
     run_workflow_task.delay(str(run.id))
     return run
+
+
+@router.post("/workflow/run/batch", response_model=list[WorkflowRunBatchItem], status_code=202)
+async def run_workflow_batch(
+    payload: WorkflowRunBatchCreate,
+    session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[WorkflowRunBatchItem]:
+    """Triggers one run per donor_id -- the explicit action that turns a
+    staged (CSV-ingested or otherwise never-run) donor into a real run. Reuses
+    the exact same per-donor path as POST /workflow/run in a loop, so a bad
+    donor_id in the batch is reported per-item rather than sinking the rest."""
+    campaign_uuid = uuid.UUID(payload.campaign_id) if payload.campaign_id else None
+    results: list[WorkflowRunBatchItem] = []
+
+    for donor_id in payload.donor_ids:
+        try:
+            donor_uuid = await _resolve_donor_id(session, donor_id)
+        except HTTPException as exc:
+            results.append(WorkflowRunBatchItem(donor_id=donor_id, status="error", error=str(exc.detail)))
+            continue
+
+        run = WorkflowRun(donor_id=donor_uuid, campaign_id=campaign_uuid)
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+        run_workflow_task.delay(str(run.id))
+        results.append(WorkflowRunBatchItem(donor_id=donor_id, status="enqueued", workflow_run_id=run.id))
+
+    return results
 
 
 @router.get("/workflow/reviews", response_model=list[WorkflowReviewSummary])
