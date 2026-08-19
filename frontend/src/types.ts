@@ -74,3 +74,22 @@ export interface WorkflowRunCreate {
   donor_id: string;
   campaign_id?: string;
 }
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface Token {
+  access_token: string;
+  token_type: string;
+}
+
+export interface UserRead {
+  id: string;
+  email: string;
+  full_name: string;
+  role: "admin" | "reviewer";
+  is_active: boolean;
+  created_at: string;
+}
