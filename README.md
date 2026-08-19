@@ -581,14 +581,25 @@ Two things that had to survive the extra hop, both confirmed against a live d-00
 
 ## Demos
 
+Every command below requires a session token — log in once and export it (all `/workflow/*` routes require it since Phase 9a):
+
+```bash
+curl -X POST localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@prf.local", "password": "changeme123"}'
+# -> {"access_token": "...", "token_type": "bearer"}
+
+export TOKEN=<paste access_token above>
+```
+
 ### The full human-in-the-loop loop (address stage)
 
 ```bash
 curl -X POST localhost:8000/api/v1/workflow/run \
-  -H "Content-Type: application/json" -d '{"donor_id": "d-0009"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"donor_id": "d-0009"}'
 # -> {"id": "<workflow_run_id>", "status": "pending", ...}
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Bearer $TOKEN"
 # -> status: awaiting_review, current_agent: human_review,
 #    pending_review: { reason: "address_confidence_below_threshold",
 #      address_result: { moved: true, confidence: 0.6,
@@ -599,25 +610,26 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
 #    — the graph is genuinely paused here; it will not proceed on its own.
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
-  -H "Content-Type: application/json" \
-  -d '{"action": "modify", "updated_address": "1225 Pine St, Denver, CO 80218", "reviewer": "demo", "notes": "Confirmed via phone"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"action": "modify", "updated_address": "1225 Pine St, Denver, CO 80218", "notes": "Confirmed via phone"}'
 # -> 202, re-enqueued to resume from exactly where it stopped
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
 # -> status: completed, confidence preserved honestly (not inflated),
 #    result: { donor_verification: {...},
 #              address_intelligence: { human_reviewed: true, ... },
-#              human_review: { action: "modify", reviewer: "demo", ... } },
+#              human_review: { action: "modify", reviewer: "admin@prf.local", ... } },
 #    audit_log: rows spanning every agent that ran plus the human decision
+#    — reviewer is the logged-in user, not something the request body controls
 ```
 
 ### The major-gift review loop (recommendation stage)
 
 ```bash
 curl -X POST localhost:8000/api/v1/workflow/run \
-  -H "Content-Type: application/json" -d '{"donor_id": "d-0011"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"donor_id": "d-0011"}'
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Bearer $TOKEN"
 # -> status: awaiting_review, pending_review: { stage: "recommendation",
 #      reason: "recommendation_requires_approval",
 #      under_review: { segment: "major", ask_ladder: [2000, 3000, 5000],
@@ -626,12 +638,12 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
 #    purely the ask amount clearing the major-gift threshold.
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
-  -H "Content-Type: application/json" \
-  -d '{"action": "modify", "updated_ask_amount": 500, "reviewer": "demo", "notes": "capped pending gift-officer call"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"action": "modify", "updated_ask_amount": 500, "notes": "capped pending gift-officer call"}'
 # -> 202 — the ask is now positive, so this re-enqueues into personalize_letter,
 #    not straight to completion (recommendation is no longer terminal)
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
 # -> status: completed, current_agent: campaign_personalization,
 #    result.donation_recommendation: { recommended_ask: 500.0, human_reviewed: true,
 #      confidence: 0.9 (preserved honestly, not inflated) },
@@ -644,9 +656,9 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
 
 ```bash
 curl -X POST localhost:8000/api/v1/workflow/run \
-  -H "Content-Type: application/json" -d '{"donor_id": "d-0012"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"donor_id": "d-0012"}'
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Bearer $TOKEN"
 # -> status: awaiting_review, pending_review: { stage: "compliance",
 #      reason: "not_registered_to_solicit_in_state",
 #      under_review: { registered_to_solicit: false,
@@ -657,13 +669,13 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>"
 #    letter that can't legally mail regardless.
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
-  -H "Content-Type: application/json" \
-  -d '{"action": "approve", "reviewer": "demo", "notes": "registration filed this week, confirmed with state AG office"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"action": "approve", "notes": "registration filed this week, confirmed with state AG office"}'
 # -> 202 — approve/modify continues into the letter-content review and PDF
 #    generation; a reject ends the run, legally blocked. The decision is
 #    recorded in result.human_review regardless of outcome.
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
 # -> status: completed, current_agent: pdf_generation, confidence: null
 #    (generate_pdf has no LLM call of its own — nothing left to score),
 #    result.compliance: { registered_to_solicit: true, human_reviewed: true,
@@ -679,16 +691,16 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
 
 ```bash
 curl -X POST localhost:8000/api/v1/workflow/run \
-  -H "Content-Type: application/json" -d '{"donor_id": "d-0001"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"donor_id": "d-0001"}'
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true"
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
 # -> status: needs_review, current_agent: pdf_generation, confidence: 0.85
 #    result.compliance: { approved: false, confidence: 0.85,
 #      flagged_issues: ["implies a single gift solves...", ...] }
 #    result.pdf_generation: { reference: "PRF-02BB2AD6", page_count: 1,
 #      vendor_order_id: "PV-E64C3EC1B5", postage_class: "first_class", cost: 0.68 }
 
-curl "localhost:8000/api/v1/workflow/<workflow_run_id>/pdf" -o letter.pdf
+curl "localhost:8000/api/v1/workflow/<workflow_run_id>/pdf" -H "Authorization: Bearer $TOKEN" -o letter.pdf
 ```
 
 `generate_pdf` ran despite `compliance.approved: false` — that field is advisory (same role as every other stage's confidence threshold), not a blocking gate. The deterministic registration check in `gather_disclosures` is the only thing in Compliance that actually stops a letter from reaching print. `approved: false` routes to `needs_review` (carrying the compliance confidence through, rather than the `null` a clean `pdf_generation` terminus reports) so it surfaces in the review queue below *before* mailing, instead of reading as an unremarkable completion.
@@ -698,7 +710,7 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>/pdf" -o letter.pdf
 `GET /workflow/reviews` is the only way to discover work awaiting a human — without it, a reviewer has to already know a `workflow_run_id` to poll. It lists every run that hasn't been silently completed, sorted oldest first.
 
 ```bash
-curl "localhost:8000/api/v1/workflow/reviews"
+curl "localhost:8000/api/v1/workflow/reviews" -H "Authorization: Bearer $TOKEN"
 # -> [ { id: "...", donor_name: "Margaret Ashford", donor_external_id: "d-0011",
 #        campaign_name: null, status: "needs_review",
 #        current_agent: "pdf_generation", confidence: "0.950" },
@@ -707,10 +719,10 @@ curl "localhost:8000/api/v1/workflow/reviews"
 #        pending_review: { stage: "recommendation", ... } },
 #      ... ]  # a lighter WorkflowReviewSummary, not the full run payload
 
-curl "localhost:8000/api/v1/workflow/reviews?status=awaiting_review"
+curl "localhost:8000/api/v1/workflow/reviews?status=awaiting_review" -H "Authorization: Bearer $TOKEN"
 # -> only the genuinely blocked runs — filter to one queue at a time
 
-curl "localhost:8000/api/v1/workflow/reviews?limit=20&offset=20"
+curl "localhost:8000/api/v1/workflow/reviews?limit=20&offset=20" -H "Authorization: Bearer $TOKEN"
 # -> page 2 of 20 (limit defaults to 50)
 ```
 
