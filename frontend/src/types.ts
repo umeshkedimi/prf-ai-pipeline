@@ -93,3 +93,35 @@ export interface UserRead {
   is_active: boolean;
   created_at: string;
 }
+
+export interface DonorIngestRowError {
+  row_number: number;
+  reason: string;
+  external_id: string | null;
+}
+
+export interface DonorIngestResult {
+  import_id: string;
+  filename: string;
+  rows_inserted: number;
+  rows_updated: number;
+  rows_rejected: number;
+  rejected: DonorIngestRowError[];
+}
+
+export interface DonorUnrunRead {
+  id: string;
+  external_id: string | null;
+  first_name: string;
+  last_name: string;
+  city: string | null;
+  state: string | null;
+  created_at: string;
+}
+
+export interface WorkflowRunBatchItem {
+  donor_id: string;
+  status: "enqueued" | "error";
+  workflow_run_id: string | null;
+  error: string | null;
+}

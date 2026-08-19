@@ -1,10 +1,13 @@
 import type {
+  DonorIngestResult,
+  DonorUnrunRead,
   LoginRequest,
   ReviewDecisionCreate,
   ReviewStatus,
   Token,
   UserRead,
   WorkflowReviewSummary,
+  WorkflowRunBatchItem,
   WorkflowRunCreate,
   WorkflowRunRead,
 } from "./types";
@@ -79,6 +82,37 @@ export function startWorkflowRun(payload: WorkflowRunCreate): Promise<WorkflowRu
   return request(`/workflow/run`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function ingestDonorsCsv(file: File): Promise<DonorIngestResult> {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append("file", file);
+  // No Content-Type header here -- the browser sets it (with the multipart
+  // boundary) itself; forcing application/json like request() does would
+  // break the upload.
+  const response = await fetch(`${BASE_URL}/donors/ingest`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    if (response.status === 401) clearToken();
+    throw new Error(`${response.status} ${response.statusText}: ${body}`);
+  }
+  return response.json() as Promise<DonorIngestResult>;
+}
+
+export function listUnrunDonors(): Promise<DonorUnrunRead[]> {
+  return request("/donors/unrun");
+}
+
+export function startWorkflowRunBatch(donorIds: string[]): Promise<WorkflowRunBatchItem[]> {
+  return request("/workflow/run/batch", {
+    method: "POST",
+    body: JSON.stringify({ donor_ids: donorIds }),
   });
 }
 

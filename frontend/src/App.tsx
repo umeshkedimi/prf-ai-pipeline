@@ -3,11 +3,15 @@ import { ReviewQueue } from "./components/ReviewQueue";
 import { RunDetail } from "./components/RunDetail";
 import { NewRunForm } from "./components/NewRunForm";
 import { Login } from "./components/Login";
+import { DonorImport } from "./components/DonorImport";
 import { clearToken, getCurrentUser, getToken } from "./api";
 import type { UserRead } from "./types";
 import "./App.css";
 
+type View = "queue" | "donors";
+
 function App() {
+  const [view, setView] = useState<View>("queue");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lookupId, setLookupId] = useState("");
   const [user, setUser] = useState<UserRead | null>(null);
@@ -70,11 +74,29 @@ function App() {
             />
             <button type="submit">View</button>
           </form>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setView("queue")}
+              disabled={view === "queue"}
+            >
+              Review queue
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("donors")}
+              disabled={view === "donors"}
+            >
+              Donors
+            </button>
+          </div>
         </div>
       )}
 
       {selectedId ? (
         <RunDetail id={selectedId} onBack={() => setSelectedId(null)} />
+      ) : view === "donors" ? (
+        <DonorImport isAdmin={user.role === "admin"} onViewRun={setSelectedId} />
       ) : (
         <ReviewQueue onSelect={setSelectedId} />
       )}
