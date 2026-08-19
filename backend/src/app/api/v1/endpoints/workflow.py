@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.db.models import AgentAuditLog, Campaign, Donor, WorkflowRun
+from app.api.deps_auth import get_current_user
+from app.db.models import AgentAuditLog, Campaign, Donor, User, WorkflowRun
 from app.schemas.workflow import (
     AuditLogEntry,
     ReviewDecisionCreate,
@@ -43,7 +44,9 @@ async def _resolve_donor_id(session: AsyncSession, donor_id: str) -> uuid.UUID:
 
 @router.post("/workflow/run", response_model=WorkflowRunRead, status_code=202)
 async def run_workflow(
-    payload: WorkflowRunCreate, session: AsyncSession = Depends(get_db)
+    payload: WorkflowRunCreate,
+    session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> WorkflowRun:
     """Enqueues the pipeline and returns immediately — the API never invokes
     the LangGraph graph itself, Celery does (see workers/tasks.py). Poll
@@ -68,6 +71,7 @@ async def list_reviews(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> list[WorkflowReviewSummary]:
     """Everything a human has reason to look at: `awaiting_review` runs are
     genuinely paused on a LangGraph interrupt() and block on a decision;
@@ -111,6 +115,7 @@ async def get_workflow(
     workflow_run_id: uuid.UUID,
     verbose: bool = Query(False, description="Include the full per-agent audit trail"),
     session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> WorkflowRunRead:
     run = await session.get(WorkflowRun, workflow_run_id)
     if run is None:
@@ -155,6 +160,7 @@ async def submit_review(
     workflow_run_id: uuid.UUID,
     payload: ReviewDecisionCreate,
     session: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> WorkflowRun:
     """Submits a human decision for a workflow paused on a real LangGraph
     interrupt() and re-enqueues it to resume from exactly where it stopped."""
@@ -167,13 +173,21 @@ async def submit_review(
             detail=f"workflow run is '{run.status}', not awaiting_review — nothing to resume",
         )
 
-    resume_workflow_after_review.delay(str(run.id), payload.model_dump())
+    # reviewer is set from the authenticated session, not the request body --
+    # the field still exists on ReviewDecisionCreate for API-shape parity with
+    # HumanReviewDecision (see that schema's docstring), but any client-supplied
+    # value is overwritten here so the audit trail can't be spoofed.
+    decision = payload.model_dump()
+    decision["reviewer"] = user.email
+    resume_workflow_after_review.delay(str(run.id), decision)
     return run
 
 
 @router.get("/workflow/{workflow_run_id}/pdf")
 async def get_workflow_pdf(
-    workflow_run_id: uuid.UUID, session: AsyncSession = Depends(get_db)
+    workflow_run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Serves the generated letter. generate_pdf writes to disk (see
     render.py's LETTER_STORAGE_DIR) and only records the path in
