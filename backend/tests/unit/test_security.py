@@ -29,8 +29,14 @@ def test_create_access_token_round_trips_with_decode_access_token():
 
 
 def test_decode_access_token_rejects_a_tampered_token():
+    # Tamper a non-terminal character, not token[-1]: a 32-byte HMAC-SHA256
+    # signature's base64url encoding has 2 padding bits in its *final*
+    # character (32 isn't a multiple of 3), so some substitutions there
+    # decode to identical signature bytes and the token would still verify --
+    # flaky about 1 run in 4. Any earlier character is a full 6-bit group,
+    # so tampering it always changes the decoded bytes.
     token = create_access_token(subject="user-id-123", role="reviewer")
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    tampered = token[:-2] + ("A" if token[-2] != "A" else "B") + token[-1]
     with pytest.raises(jwt.PyJWTError):
         decode_access_token(tampered)
 
