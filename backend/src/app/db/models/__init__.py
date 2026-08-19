@@ -2,6 +2,7 @@ from app.db.models.agent_audit_log import AgentAuditLog
 from app.db.models.campaign import Campaign
 from app.db.models.donation import Donation
 from app.db.models.donor import Donor
+from app.db.models.donor_import import DonorImport
 from app.db.models.eval_run import EvalRun
 from app.db.models.knowledge_chunk import KnowledgeChunk
 from app.db.models.suppression import SuppressionListEntry
@@ -13,6 +14,7 @@ __all__ = [
     "Campaign",
     "Donation",
     "Donor",
+    "DonorImport",
     "EvalRun",
     "KnowledgeChunk",
     "SuppressionListEntry",
