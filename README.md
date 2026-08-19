@@ -22,6 +22,7 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Status and confidence semantics](#status-and-confidence-semantics)
 - [Data model](#data-model)
 - [API reference](#api-reference)
+- [Authentication and authorization](#authentication-and-authorization)
 - [Configuration reference](#configuration-reference)
 - [Getting started](#getting-started)
 - [Frontend (review dashboard)](#frontend-review-dashboard)
@@ -163,10 +164,11 @@ Built **incrementally, phase by phase**, each phase fully working and demoable b
 | **6** ✅ | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP — no LLM call, purely mechanical assembly and a mocked vendor order |
 | **7** ✅ | Review queue (`GET /workflow/reviews` with donor/campaign names and pagination) + per-run decision history (`review_history`, derived from the audit trail) + routing a disapproved compliance review to `needs_review` + `graph/builder.py` split into named verification/fulfillment units |
 | **8** ✅ | **8a** React review dashboard (`frontend/`). **8b** OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning API, Celery, and every agent node. **8c** CI (`.github/workflows/ci.yml`) — lint + offline unit suite on every push/PR |
+| **9** 🟡 | **9a** ✅ Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** ⬜ CSV donor ingestion, staged (not auto-run) — not started |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
 
-All eight phases plus the evaluation framework are complete.
+Phases 1–8 plus the evaluation framework are complete; Phase 9 (multi-user auth + CSV ingestion) is in progress — see [Authentication and authorization](#authentication-and-authorization).
 
 ## The pipeline graph
 
@@ -318,12 +320,18 @@ Base path: `/api/v1`. Interactive docs at `http://localhost:8000/docs`.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Liveness probe → `{"status": "ok"}` |
+| `POST` | `/auth/login` | Body `{"email", "password"}` → `{"access_token", "token_type"}` |
+| `GET` | `/auth/me` | The authenticated user |
+| `POST` | `/auth/users` | Admin-only. Create a user — `{"email", "full_name", "password", "role"}` |
+| `GET` | `/auth/users` | Admin-only. List all users |
 | `POST` | `/workflow/run` | Start a run. Body `{"donor_id": "d-0009"}`. Returns `202` + the run record |
 | `GET` | `/workflow/reviews` | Review queue — `awaiting_review` + `needs_review` runs, oldest first. Query: `status`, `limit` (default 50), `offset` |
 | `GET` | `/workflow/{id}` | Full run: status, `result`, `pending_review`, `review_history`. Add `?verbose=true` for the audit log |
 | `POST` | `/workflow/{id}/review` | Submit a human decision. Returns `202`; resumes asynchronously via Celery |
 | `GET` | `/workflow/{id}/pdf` | Stream the generated letter PDF. `404` if the run never produced one |
 | `GET` | `/metrics` | Prometheus exposition (API request metrics) |
+
+Every `/workflow/*` route requires `Authorization: Bearer <token>` from `/auth/login` — see [Authentication and authorization](#authentication-and-authorization).
 
 `donor_id` accepts either the CRM's `external_id` (e.g. `"d-0009"`, as seeded) or the internal UUID directly.
 
@@ -332,16 +340,26 @@ Base path: `/api/v1`. Interactive docs at `http://localhost:8000/docs`.
 ```json
 {
   "action": "approve | reject | modify",
-  "reviewer": "string",
   "notes": "string",
   "updated_address": "only meaningful at the address stage",
   "updated_ask_amount": 500.0
 }
 ```
 
+`reviewer` is accepted for shape-parity with the agent-side schema but is always overwritten server-side with the authenticated user's email — see below.
+
 > **Note on `confidence` types.** Top-level `confidence` on a run or queue row is a SQL `Decimal` and serializes as a **JSON string** (`"0.950"`). The per-agent confidences nested inside `result` come from JSONB and are **numbers** (`0.95`). `frontend/src/types.ts` mirrors this distinction deliberately — it is not an inconsistency to "fix" without a migration.
 
-**No authentication.** See [Known limitations](#known-limitations).
+## Authentication and authorization
+
+JWT bearer auth (`core/security.py`, `api/deps_auth.py`), added in Phase 9a. Single shared dataset — every user sees every donor/campaign/run; roles only gate which *actions* are allowed, there is no per-tenant data isolation. That scope was a deliberate call: the rest of "multi-tenancy" (isolated organizations, each with its own donors/users) is a materially bigger data-model change than what a single internal fundraising team actually needs, and nothing about it is agentic-AI-specific.
+
+- **Two roles.** `admin` (manage users, full access) and `reviewer` (trigger runs, view the queue, submit decisions).
+- **`POST /auth/login`** returns a JWT (`HS256`, 8-hour expiry — a workday, not a session, since this is an internal tool reviewers keep open). Every `/workflow/*` route requires it.
+- **No public self-signup.** `scripts/seed_users.py` creates one dev-only admin (`admin@prf.local` / `changeme123` — rotate before any real deployment); that admin then onboards further users via `POST /auth/users`.
+- **Review attribution can't be spoofed.** `ReviewDecisionCreate.reviewer` still exists on the request schema (kept in sync with `agents/human_review/schemas.py:HumanReviewDecision`, per this project's usual field-parity convention), but the `/workflow/{id}/review` endpoint overwrites it with the authenticated user's email before the decision reaches the graph — verified live by submitting a decision with a forged `reviewer` value in the body and confirming `review_history` recorded the real logged-in user instead.
+
+**Not done, deliberately out of scope for 9a:** password reset/email verification, login rate limiting, refresh tokens (a token just expires and the user logs in again), and the CSV-driven donor ingestion this was originally scoped alongside (Phase 9b, not started — see [Status](#status)).
 
 ## Configuration reference
 
@@ -374,6 +392,8 @@ Calibrating these was not intuition — see [why calibration is measured](#evalu
 
 **Infrastructure:** `DATABASE_URL` (asyncpg) / `DATABASE_URL_SYNC` (psycopg, for Alembic) / `CHECKPOINTER_DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `MCP_{CRM,ADDRESS,COMPLIANCE,PRINT_VENDOR}_URL`, `CORS_ALLOWED_ORIGINS`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `CELERY_METRICS_PORT`, `LOG_LEVEL`.
 
+**Auth (Phase 9a):** `JWT_SECRET_KEY` (dev-only default, rotate before any real deployment), `JWT_ALGORITHM` (`HS256`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (`480` — a workday).
+
 ## Getting started
 
 ### Prerequisites
@@ -401,6 +421,7 @@ cd backend
 uv sync --extra dev
 uv run alembic upgrade head
 uv run python scripts/seed_db.py            # 12 labeled donors, d-0001..d-0012
+uv run python scripts/seed_users.py         # dev-only admin: admin@prf.local / changeme123
 uv run python scripts/ingest_knowledge.py   # embed campaign knowledge into pgvector
 cd ..
 
@@ -443,7 +464,9 @@ uv run python scripts/run_evals.py --include-expensive # + trajectory
 
 ## Frontend (review dashboard)
 
-A minimal Vite + React + TypeScript app consuming the review-queue API — no framework beyond React itself, no client-side router (the whole app is a queue view and a run-detail view, toggled by component state), no CSS library, no state management beyond `useState`. It's a UI for reviewing paused/flagged runs and submitting decisions, not a general admin panel.
+A minimal Vite + React + TypeScript app consuming the review-queue API — no framework beyond React itself, no client-side router (the whole app is a login screen, a queue view, and a run-detail view, toggled by component state), no CSS library, no state management beyond `useState`. It's a UI for reviewing paused/flagged runs and submitting decisions, not a general admin panel.
+
+`Login.tsx` gates the whole app: `App.tsx` checks for a stored token via `GET /auth/me` on load and renders the login form until that succeeds. The token lives in `localStorage`, is attached as a `Bearer` header on every request (`api.ts`), and any `401` response clears it — an expired session drops back to login on the next action rather than failing silently.
 
 ```bash
 cd frontend
@@ -839,7 +862,8 @@ Decisions worth defending, with the counter-argument stated rather than hidden:
 
 Stated plainly, because a portfolio piece that hides its edges is less useful than one that names them:
 
-- **No authentication on any API endpoint.** Single-tenant demo. A real deployment needs API-key or OAuth auth plus per-tenant data scoping. Deliberately not built — it's well-understood work that isn't agentic-AI-specific, and building it would not have made this a better demonstration of the thing it's demonstrating.
+- **Auth is single-org RBAC, not multi-tenant.** Phase 9a (see [Authentication and authorization](#authentication-and-authorization)) added JWT login and two roles, but there is no per-tenant data isolation — every user sees every donor/campaign/run. True multi-tenancy (isolated organizations) was scoped out deliberately as a bigger data-model change than this internal tool needs.
+- **CSV donor ingestion (Phase 9b) is not built yet.** Donors currently arrive only via `seed_db.py` or the CRM MCP server, not a bulk upload path. Scoped as staged-not-auto-run — an upload should never silently fire off LLM-calling runs unattended — but not started.
 - **All external integrations are mocked.** CRM, address verification, compliance registration, and the print vendor return synthetic fixtures. The **MCP protocol layer is real** — swapping in a live vendor is a URL change — but no real address has ever been verified and no real letter has ever been mailed.
 - **Embeddings require `OPENAI_API_KEY` even on the otherwise key-free Ollama configuration**, because retrieval embeds the query at runtime. Moving to local embeddings requires re-ingesting the corpus, and any dimension other than 1536 needs a migration on the `Vector` column.
 - **`core/config.py`'s in-code defaults still name `google_genai`**, while `.env.example` and the eval baseline use Ollama. A copied `.env` wins, so this only affects running with no `.env` at all.
