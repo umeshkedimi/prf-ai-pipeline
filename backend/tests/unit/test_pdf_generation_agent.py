@@ -85,6 +85,23 @@ async def test_generate_pdf_merges_vendor_confirmation(monkeypatch, _mock_audit_
     assert _mock_audit_log[0]["step"] == "generate_pdf"
 
 
+async def test_recommended_ask_flows_from_recommendation_result_to_render(monkeypatch, _mock_audit_log):
+    _mock_vendor(monkeypatch, _VENDOR_RESULT)
+    render_calls = _mock_render(monkeypatch)
+
+    state = {
+        "workflow_run_id": "wf-4",
+        "donor_profile": {"first_name": "Eleanor", "last_name": "Whitfield"},
+        "personalization_result": {},
+        "compliance_result": {"required_disclosures": []},
+        "address_result": {},
+        "recommendation_result": {"recommended_ask": 225.0},
+    }
+    await agent_module.generate_pdf(state)
+
+    assert render_calls[0]["recommended_ask"] == 225.0
+
+
 async def test_mailing_address_prefers_updated_address_over_profile(monkeypatch, _mock_audit_log):
     _mock_vendor(monkeypatch, _VENDOR_RESULT)
     render_calls = _mock_render(monkeypatch)

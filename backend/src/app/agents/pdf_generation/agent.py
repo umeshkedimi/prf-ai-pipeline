@@ -37,6 +37,7 @@ async def generate_pdf(state: PipelineState) -> dict:
     letter = state.get("personalization_result") or {}
     compliance = state.get("compliance_result") or {}
     address_result = state.get("address_result") or {}
+    recommendation = state.get("recommendation_result") or {}
     disclosures = compliance.get("required_disclosures", [])
 
     reference = build_reference(workflow_run_id)
@@ -47,6 +48,7 @@ async def generate_pdf(state: PipelineState) -> dict:
         mailing_address=mailing_address,
         letter=letter,
         disclosures=disclosures,
+        recommended_ask=recommendation.get("recommended_ask"),
     )
 
     tools = await get_print_vendor_tools()
