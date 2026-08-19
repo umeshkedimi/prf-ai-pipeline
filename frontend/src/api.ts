@@ -4,9 +4,10 @@ import type {
   LoginRequest,
   ReviewDecisionCreate,
   ReviewStatus,
+  RunStatus,
   Token,
   UserRead,
-  WorkflowReviewSummary,
+  WorkflowRunSummary,
   WorkflowRunBatchItem,
   WorkflowRunCreate,
   WorkflowRunRead,
@@ -60,10 +61,20 @@ export function listReviews(
   status: ReviewStatus | "all",
   limit: number,
   offset: number,
-): Promise<WorkflowReviewSummary[]> {
+): Promise<WorkflowRunSummary[]> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status !== "all") params.set("status", status);
   return request(`/workflow/reviews?${params}`);
+}
+
+export function listRuns(
+  status: RunStatus | "all",
+  limit: number,
+  offset: number,
+): Promise<WorkflowRunSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (status !== "all") params.set("status", status);
+  return request(`/workflow/runs?${params}`);
 }
 
 export function getWorkflowRun(id: string, verbose = false): Promise<WorkflowRunRead> {

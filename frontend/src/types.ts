@@ -2,8 +2,9 @@
 // serialize as JSON strings, not numbers -- Pydantic's default for Decimal.
 
 export type ReviewStatus = "awaiting_review" | "needs_review";
+export type RunStatus = "pending" | "running" | "awaiting_review" | "completed" | "needs_review" | "failed";
 
-export interface WorkflowReviewSummary {
+export interface WorkflowRunSummary {
   id: string;
   donor_id: string;
   donor_name: string;

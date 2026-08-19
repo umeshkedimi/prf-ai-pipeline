@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ReviewQueue } from "./components/ReviewQueue";
+import { RunHistory } from "./components/RunHistory";
 import { RunDetail } from "./components/RunDetail";
 import { NewRunForm } from "./components/NewRunForm";
 import { Login } from "./components/Login";
@@ -8,7 +9,7 @@ import { clearToken, getCurrentUser, getToken } from "./api";
 import type { UserRead } from "./types";
 import "./App.css";
 
-type View = "queue" | "donors";
+type View = "queue" | "history" | "donors";
 
 function App() {
   const [view, setView] = useState<View>("queue");
@@ -84,6 +85,13 @@ function App() {
             </button>
             <button
               type="button"
+              onClick={() => setView("history")}
+              disabled={view === "history"}
+            >
+              All runs
+            </button>
+            <button
+              type="button"
               onClick={() => setView("donors")}
               disabled={view === "donors"}
             >
@@ -97,6 +105,8 @@ function App() {
         <RunDetail id={selectedId} onBack={() => setSelectedId(null)} />
       ) : view === "donors" ? (
         <DonorImport isAdmin={user.role === "admin"} onViewRun={setSelectedId} />
+      ) : view === "history" ? (
+        <RunHistory onSelect={setSelectedId} />
       ) : (
         <ReviewQueue onSelect={setSelectedId} />
       )}

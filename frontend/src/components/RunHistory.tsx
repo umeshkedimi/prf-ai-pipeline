@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { listReviews } from "../api";
-import type { ReviewStatus, WorkflowRunSummary } from "../types";
+import { listRuns } from "../api";
+import type { RunStatus, WorkflowRunSummary } from "../types";
 import { StatusBadge } from "./StatusBadge";
 
 const PAGE_SIZE = 20;
 
-export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
-  const [status, setStatus] = useState<ReviewStatus | "all">("all");
+export function RunHistory({ onSelect }: { onSelect: (id: string) => void }) {
+  const [status, setStatus] = useState<RunStatus | "all">("all");
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<WorkflowRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -15,7 +15,7 @@ export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listReviews(status, PAGE_SIZE, offset)
+    listRuns(status, PAGE_SIZE, offset)
       .then(setRows)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -25,17 +25,21 @@ export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
     <div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <label>
-          Queue:{" "}
+          Status:{" "}
           <select
             value={status}
             onChange={(e) => {
-              setStatus(e.target.value as ReviewStatus | "all");
+              setStatus(e.target.value as RunStatus | "all");
               setOffset(0);
             }}
           >
-            <option value="all">All (awaiting + needs review)</option>
-            <option value="awaiting_review">Awaiting review (blocking)</option>
-            <option value="needs_review">Needs review (advisory)</option>
+            <option value="all">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="needs_review">Needs review</option>
+            <option value="awaiting_review">Awaiting review</option>
+            <option value="running">Running</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
           </select>
         </label>
       </div>
@@ -44,7 +48,7 @@ export function ReviewQueue({ onSelect }: { onSelect: (id: string) => void }) {
       {loading ? (
         <p>Loading…</p>
       ) : rows.length === 0 ? (
-        <p>Nothing in this queue.</p>
+        <p>No runs match this filter.</p>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
