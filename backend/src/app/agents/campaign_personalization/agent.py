@@ -25,11 +25,44 @@ def build_retrieval_query(segment: str) -> str:
     )
 
 
+def build_revision_feedback(letter: dict, compliance: dict) -> str:
+    """The prompt section for a compliance-driven rewrite: the previous draft
+    plus exactly what the reviewer flagged. Extracted so tests can pin it."""
+    issues = compliance.get("flagged_issues") or compliance.get("reasoning") or []
+    return (
+        "\nREVISION REQUIRED. A compliance review rejected your previous draft.\n"
+        f"Previous opening: {letter.get('opening_line', '')}\n"
+        f"Previous body: {letter.get('body', '')}\n"
+        f"Previous closing: {letter.get('closing_line', '')}\n"
+        f"Issues to fix: {issues}\n"
+        "Rewrite the letter so none of these issues remain. All original rules still "
+        "apply, including copying tone and segment through unchanged.\n"
+    )
+
+
 async def personalize_letter(state: PipelineState) -> dict:
     """Deterministic tone lookup from the donor's segment, then an LLM draft of
     the personalized letter grounded in retrieved stewardship/impact knowledge.
     The model drafts within a fixed tone and cited facts; it never chooses the
     tone or invents figures."""
+    return await _draft_letter(state, step="personalize_letter")
+
+
+async def revise_letter(state: PipelineState) -> dict:
+    """Bounded rewrite after Compliance disapproves a draft. Same drafting
+    rules, same grounding, plus the reviewer's flagged issues. Increments
+    `letter_revisions`, which route_after_compliance caps deterministically."""
+    update = await _draft_letter(
+        state,
+        step="revise_letter",
+        feedback=build_revision_feedback(
+            state.get("personalization_result") or {}, state.get("compliance_result") or {}
+        ),
+    )
+    return {**update, "letter_revisions": state.get("letter_revisions", 0) + 1}
+
+
+async def _draft_letter(state: PipelineState, step: str, feedback: str = "") -> dict:
     started = time.monotonic()
     settings = get_settings()
     rec = state.get("recommendation_result") or {}
@@ -50,6 +83,7 @@ async def personalize_letter(state: PipelineState) -> dict:
         f"Recommended ask: ${rec.get('recommended_ask', 0)}\n"
         f"Ask rationale: {rec.get('rationale', [])}\n\n"
         f"Retrieved campaign knowledge:\n{knowledge}\n"
+        f"{feedback}"
     )
     messages = [
         SystemMessage(content=PERSONALIZE_LETTER_SYSTEM_PROMPT),
@@ -62,8 +96,13 @@ async def personalize_letter(state: PipelineState) -> dict:
     await write_audit_log(
         workflow_run_id=state["workflow_run_id"],
         agent_name=AGENT_NAME,
-        step="personalize_letter",
-        input_snapshot={"segment": segment, "tone": tone, "query": query},
+        step=step,
+        input_snapshot={
+            "segment": segment,
+            "tone": tone,
+            "query": query,
+            **({"revision_feedback": feedback} if feedback else {}),
+        },
         output=personalization,
         confidence=personalization["confidence"],
         reasoning="; ".join(personalization["rationale"]),

@@ -29,6 +29,8 @@ class PipelineState(TypedDict, total=False):
     compliance_disclosures: dict[str, Any] | None  # raw gather_disclosures MCP output
     compliance_result: dict[str, Any] | None  # final LetterComplianceAssessment + disclosures
 
+    letter_revisions: int  # compliance-driven rewrites so far; capped by settings
+
     # --- 6. PDF Generation (Phase 6) ---
     pdf_result: dict[str, Any] | None
 

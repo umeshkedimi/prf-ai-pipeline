@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     # `needs_review` when the LLM's own risk assessment is a close call,
     # same non-blocking role as the recommendation/personalization thresholds.
     confidence_threshold_compliance: float = 0.75
+    # Cap on compliance-driven letter rewrites (review_letter_compliance ->
+    # revise_letter -> review_letter_compliance). Deterministic by design: the
+    # loop is bounded by this count, never by the model deciding it is done.
+    max_letter_revisions: int = 2
     # A recommended ask at or above this dollar amount is a major-gift decision
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0

@@ -94,6 +94,25 @@ async def _audit_steps(workflow_run_id: str) -> list[str]:
         return list(result.scalars().all())
 
 
+def collapse_revisions(steps: list[str]) -> list[str]:
+    """Drop each compliance-driven rewrite (`revise_letter` plus the repeat
+    `review_letter_compliance` it triggers) from the path. Whether a letter
+    needed a rewrite is the model's judgment, so it varies run to run; leaving
+    it in would make `node_path_exact` score the *model's* draft quality
+    rather than the graph's routing. The loop's bounds are unit-tested."""
+    out: list[str] = []
+    skip_next_review = False
+    for step in steps:
+        if step == "revise_letter":
+            skip_next_review = True
+            continue
+        if step == "review_letter_compliance" and skip_next_review:
+            skip_next_review = False
+            continue
+        out.append(step)
+    return out
+
+
 async def run_case(case: EvalCase) -> dict:
     donor_id = await resolve_donor_id(case.inputs["external_id"])
     workflow_run_id = await create_workflow_run(donor_id)
@@ -117,7 +136,7 @@ async def run_case(case: EvalCase) -> dict:
 
     return {
         "terminal": terminal,
-        "path": await _audit_steps(workflow_run_id),
+        "path": collapse_revisions(await _audit_steps(workflow_run_id)),
         "workflow_run_id": workflow_run_id,
     }
 

@@ -5,7 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.address_intelligence.agent import assess_and_normalize, verify_address
-from app.agents.campaign_personalization.agent import personalize_letter
+from app.agents.campaign_personalization.agent import personalize_letter, revise_letter
 from app.agents.compliance.agent import gather_disclosures, review_letter_compliance
 from app.agents.donation_recommendation.agent import compute_rfm, recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
@@ -102,6 +102,25 @@ def route_after_disclosures(state: PipelineState) -> str:
     return "review_letter_compliance"
 
 
+def route_after_compliance(state: PipelineState) -> str:
+    """Bounded critique -> revise loop: a disapproved letter is rewritten up to
+    `max_letter_revisions` times before the run falls through to PDF generation
+    and lands in `needs_review` as before.
+
+    Unlike the other routing functions this reads a model-produced boolean
+    (`approved`). That's acceptable here because the loop is *advisory and
+    bounded*, not a gate: the worst a misjudged `approved` can do is cost one
+    extra draft or skip one, and the cap is a deterministic counter. The
+    blocking compliance gate (state registration) stays in
+    route_after_disclosures and never routes off the model."""
+    compliance = state.get("compliance_result") or {}
+    if compliance.get("approved", True):
+        return "generate_pdf"
+    if state.get("letter_revisions", 0) < get_settings().max_letter_revisions:
+        return "revise_letter"
+    return "generate_pdf"
+
+
 def _add_verification_unit(graph: StateGraph) -> None:
     """Donor Verification + Address Intelligence: confirms the donor record and
     resolves a mailable address before any money math runs. Both stages gate on
@@ -136,6 +155,7 @@ def _add_fulfillment_unit(graph: StateGraph) -> None:
     graph.add_node("compute_rfm", traced_node("compute_rfm", compute_rfm))
     graph.add_node("recommend_ask", traced_node("recommend_ask", recommend_ask))
     graph.add_node("personalize_letter", traced_node("personalize_letter", personalize_letter))
+    graph.add_node("revise_letter", traced_node("revise_letter", revise_letter))
     graph.add_node("gather_disclosures", traced_node("gather_disclosures", gather_disclosures))
     graph.add_node(
         "review_letter_compliance", traced_node("review_letter_compliance", review_letter_compliance)
@@ -154,7 +174,14 @@ def _add_fulfillment_unit(graph: StateGraph) -> None:
         route_after_disclosures,
         {"human_review": "human_review", "review_letter_compliance": "review_letter_compliance"},
     )
-    graph.add_edge("review_letter_compliance", "generate_pdf")
+    graph.add_conditional_edges(
+        "review_letter_compliance",
+        route_after_compliance,
+        {"revise_letter": "revise_letter", "generate_pdf": "generate_pdf"},
+    )
+    # Disclosures are a fixed lookup on the donor's state, so a rewrite goes
+    # straight back to the content review without repeating gather_disclosures.
+    graph.add_edge("revise_letter", "review_letter_compliance")
     graph.add_edge("generate_pdf", END)
 
 
