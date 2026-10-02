@@ -208,7 +208,10 @@ START → fetch_core_data → gather_context → synthesize_verdict
                                                        └─ registered → review_letter_compliance
                                                                           [RAG over compliance guidance]
                                                                           │
-                                                                          └─ generate_pdf → END
+                                                                          ├─ disapproved, revisions < cap
+                                                                          │      → revise_letter → review_letter_compliance
+                                                                          └─ approved, or cap reached
+                                                                                 → generate_pdf → END
                                                                                 [Print Vendor MCP]
 ```
 
@@ -246,6 +249,8 @@ The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history
 
 1. **`gather_disclosures`** — deterministic `get_disclosure_requirements` MCP call keyed on the donor's state. Whether the org is registered to solicit there at all is a legal fact, not a judgment call — if not, there is no letter-content review to make, so the graph pauses immediately rather than spending an LLM call on wording for a letter that can't legally mail regardless.
 2. **`review_letter_compliance`** — only reached when registered. Retrieves compliance guidance from pgvector and has an LLM judge the drafted letter for donor-rights/tax-language risk (`approved`, `confidence`, `flagged_issues[]`, `reasoning[]`). Required disclosures are merged in afterward from `gather_disclosures`' output, **never routed through the LLM** — legal boilerplate is not something a model should be asked to reproduce. `approved: false` is advisory: it routes the run to `needs_review` but does not block `generate_pdf`.
+
+   **Critique → revise loop.** Before falling through, a disapproved letter is sent to `revise_letter` (in `campaign_personalization`), which redrafts with the previous draft and the reviewer's `flagged_issues` in the prompt, then goes back to `review_letter_compliance` (not `gather_disclosures` — disclosures depend only on the donor's state). Capped at `MAX_LETTER_REVISIONS` (default 2) by a plain counter, `letter_revisions`, so the loop is bounded by code, never by the model deciding it is done. This routes off the model's `approved` boolean, which the determinism boundary normally avoids; it is acceptable here because the loop is advisory and bounded — a misjudgement costs one extra or one skipped draft — while the blocking compliance gate (state registration) still never reads model output. Each rewrite writes its own `revise_letter` audit row including the feedback it received. The trajectory eval strips rewrite cycles from the recorded path (`collapse_revisions`): whether a draft needed rewriting is model judgment, and scoring it would make `node_path_exact` grade drafting quality instead of routing.
 
 **PDF Generation** (Phase 6) — 1 node, the pipeline's terminus:
 
@@ -402,6 +407,7 @@ All configuration is environment-driven via `pydantic-settings` (`core/config.py
 | `CONFIDENCE_THRESHOLD_DONATION_RECOMMENDATION` | `0.50` | No | A *prediction* about a future gift runs honestly lower — ~0.5–0.7 for a thin but usable single-gift history |
 | `CONFIDENCE_THRESHOLD_CAMPAIGN_PERSONALIZATION` | `0.60` | No | Judgment, but groundedness is more concrete than a future gift |
 | `CONFIDENCE_THRESHOLD_COMPLIANCE` | `0.75` | No | Judging *already-written* text is closer to a factual read |
+| `MAX_LETTER_REVISIONS` | `2` | No | Cap on compliance-driven letter rewrites before the run falls through to `needs_review` |
 | `MAJOR_GIFT_ASK_THRESHOLD` | `1000.0` | **Pauses** | Deterministic dollar amount |
 
 Calibrating these was not intuition — see [why calibration is measured](#evaluation-framework).
