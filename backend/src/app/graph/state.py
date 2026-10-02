@@ -36,3 +36,5 @@ class PipelineState(TypedDict, total=False):
 
     # --- 7. Human Review (Phase 2+, interrupt-based) ---
     human_review_decision: dict[str, Any] | None
+    # Writing guidance extracted from the reviewer's notes by reconcile_decision.
+    reviewer_guidance: dict[str, Any] | None

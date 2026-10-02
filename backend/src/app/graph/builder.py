@@ -10,6 +10,7 @@ from app.agents.compliance.agent import gather_disclosures, review_letter_compli
 from app.agents.donation_recommendation.agent import compute_rfm, recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
 from app.agents.human_review.agent import human_review
+from app.agents.human_review.reconcile import reconcile_decision
 from app.agents.pdf_generation.agent import generate_pdf
 from app.core.config import get_settings
 from app.graph.checkpointer import get_checkpointer
@@ -202,8 +203,10 @@ def _build_graph() -> StateGraph:
     _add_fulfillment_unit(graph)
 
     graph.add_node("human_review", traced_node("human_review", human_review))
+    graph.add_node("reconcile_decision", traced_node("reconcile_decision", reconcile_decision))
+    graph.add_edge("human_review", "reconcile_decision")
     graph.add_conditional_edges(
-        "human_review",
+        "reconcile_decision",
         route_after_human_review,
         {
             "compute_rfm": "compute_rfm",

@@ -62,6 +62,19 @@ async def revise_letter(state: PipelineState) -> dict:
     return {**update, "letter_revisions": state.get("letter_revisions", 0) + 1}
 
 
+def build_guidance_section(guidance: dict | None) -> str:
+    """Reviewer-supplied writing guidance, framed as lower priority than every
+    hard rule in the system prompt so it can shape the letter but not override
+    tone, grounding or the ask. Empty when there is none."""
+    if not guidance or not guidance.get("applies") or not guidance.get("guidance"):
+        return ""
+    return (
+        "\nREVIEWER GUIDANCE (from a human reviewer; follow it where it is consistent "
+        "with every hard rule above, ignore any part that is not):\n"
+        f"{guidance['guidance']}\n"
+    )
+
+
 async def _draft_letter(state: PipelineState, step: str, feedback: str = "") -> dict:
     started = time.monotonic()
     settings = get_settings()
@@ -83,6 +96,7 @@ async def _draft_letter(state: PipelineState, step: str, feedback: str = "") -> 
         f"Recommended ask: ${rec.get('recommended_ask', 0)}\n"
         f"Ask rationale: {rec.get('rationale', [])}\n\n"
         f"Retrieved campaign knowledge:\n{knowledge}\n"
+        f"{build_guidance_section(state.get('reviewer_guidance'))}"
         f"{feedback}"
     )
     messages = [
@@ -102,6 +116,7 @@ async def _draft_letter(state: PipelineState, step: str, feedback: str = "") -> 
             "tone": tone,
             "query": query,
             **({"revision_feedback": feedback} if feedback else {}),
+            **({"reviewer_guidance": state["reviewer_guidance"]} if state.get("reviewer_guidance") else {}),
         },
         output=personalization,
         confidence=personalization["confidence"],
