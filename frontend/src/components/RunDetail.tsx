@@ -41,7 +41,13 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
   if (!run) return null;
 
   const pdfResult = run.result?.pdf_generation as
-    | { reference: string; tracking_number: string; postage_class: string }
+    | {
+        reference: string;
+        tracking_number: string | null;
+        postage_class: string | null;
+        held?: boolean;
+        hold_reason?: string[];
+      }
     | undefined;
 
   return (
@@ -65,8 +71,17 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
       {pdfResult && (
         <p>
-          Letter generated — ref <strong>{pdfResult.reference}</strong>, tracking{" "}
-          {pdfResult.tracking_number} ({pdfResult.postage_class}).{" "}
+          {pdfResult.held ? (
+            <>
+              Letter generated but <strong>held — not sent to print</strong>, ref{" "}
+              <strong>{pdfResult.reference}</strong>.{" "}
+            </>
+          ) : (
+            <>
+              Letter generated — ref <strong>{pdfResult.reference}</strong>, tracking{" "}
+              {pdfResult.tracking_number} ({pdfResult.postage_class}).{" "}
+            </>
+          )}
           <button type="button" onClick={handleViewPdf}>
             View PDF
           </button>
@@ -88,9 +103,10 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
           reached a final state (nothing is paused).{" "}
           {run.current_agent === "pdf_generation" ? (
             <>
-              PDF generation itself has no confidence of its own — it ran and mailed the letter
-              anyway (advisory, not blocking), but the <strong>Compliance</strong> review disapproved
-              the letter's wording. See the Compliance card below for what it flagged.
+              PDF generation itself has no confidence of its own — it rendered the letter but{" "}
+              <strong>held it back from the print vendor</strong> because the{" "}
+              <strong>Compliance</strong> review disapproved the letter's wording, even after
+              automatic rewrites. See the Compliance card below for what it flagged.
             </>
           ) : (
             <>
