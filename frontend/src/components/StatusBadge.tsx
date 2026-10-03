@@ -3,6 +3,7 @@ const COLORS: Record<string, string> = {
   needs_review: "#b45309",
   completed: "#15803d",
   failed: "#b91c1c",
+  discarded: "#57534e",
   running: "#1d4ed8",
   pending: "#57534e",
 };

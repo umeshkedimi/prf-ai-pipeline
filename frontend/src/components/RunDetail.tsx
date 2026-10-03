@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchWorkflowPdf, getWorkflowRun, submitReview } from "../api";
+import { decideHeldLetter, fetchWorkflowPdf, getWorkflowRun, submitReview } from "../api";
 import type { WorkflowRunRead } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { ReviewDecisionForm } from "./ReviewDecisionForm";
+import { HeldLetterForm } from "./HeldLetterForm";
 import { ResultCard } from "./ResultCard";
 
 export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
@@ -99,8 +100,12 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
             padding: 12,
           }}
         >
-          <strong>Advisory only — nothing to approve or reject here.</strong> The pipeline already
-          reached a final state (nothing is paused).{" "}
+          {pdfResult?.held ? (
+            <strong>This letter is held — decide below.</strong>
+          ) : (
+            <strong>Advisory only — nothing to approve or reject here.</strong>
+          )}{" "}
+          The pipeline already reached a final state (nothing is paused).{" "}
           {run.current_agent === "pdf_generation" ? (
             <>
               PDF generation itself has no confidence of its own — it rendered the letter but{" "}
@@ -124,6 +129,21 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <ResultCard key={key} stepKey={key} data={data as Record<string, unknown>} />
           ))}
         </section>
+      )}
+
+      {run.status === "needs_review" && pdfResult?.held && (
+        <HeldLetterForm
+          holdReason={pdfResult.hold_reason ?? []}
+          onSubmit={async (decision) => {
+            await decideHeldLetter(id, decision);
+            setMessage(
+              decision.action === "release"
+                ? "Release submitted — the print order is being placed. Refresh in a moment."
+                : "Letter discarded — nothing will be mailed.",
+            );
+            load();
+          }}
+        />
       )}
 
       {run.status === "awaiting_review" && run.pending_review && (

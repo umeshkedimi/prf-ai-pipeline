@@ -1,6 +1,7 @@
 import type {
   DonorIngestResult,
   DonorUnrunRead,
+  HeldLetterDecision,
   LoginRequest,
   ReviewDecisionCreate,
   ReviewStatus,
@@ -84,6 +85,13 @@ export function getWorkflowRun(id: string, verbose = false): Promise<WorkflowRun
 
 export function submitReview(id: string, decision: ReviewDecisionCreate): Promise<WorkflowRunRead> {
   return request(`/workflow/${id}/review`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+  });
+}
+
+export function decideHeldLetter(id: string, decision: HeldLetterDecision): Promise<WorkflowRunRead> {
+  return request(`/workflow/${id}/release`, {
     method: "POST",
     body: JSON.stringify(decision),
   });

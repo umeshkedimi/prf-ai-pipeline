@@ -40,6 +40,7 @@ export function RunHistory({ onSelect }: { onSelect: (id: string) => void }) {
             <option value="running">Running</option>
             <option value="pending">Pending</option>
             <option value="failed">Failed</option>
+            <option value="discarded">Discarded</option>
           </select>
         </label>
       </div>
