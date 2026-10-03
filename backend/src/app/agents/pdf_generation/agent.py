@@ -30,7 +30,11 @@ async def generate_pdf(state: PipelineState) -> dict:
     and its legally required disclosures, then submits it to the (mocked)
     Print Vendor for fulfillment. No LLM call — every judgment call the
     letter needed already happened upstream (personalization, compliance
-    review); what's left is mechanical layout and a vendor order."""
+    review); what's left is mechanical layout and a vendor order.
+
+    The order is the one irreversible side effect in the pipeline, so it is
+    gated on Compliance's verdict: a disapproved letter (still disapproved after
+    the revise loop) is rendered for review but held back from the vendor."""
     started = time.monotonic()
     workflow_run_id = state["workflow_run_id"]
     profile = state.get("donor_profile") or {}
@@ -51,10 +55,18 @@ async def generate_pdf(state: PipelineState) -> dict:
         recommended_ask=recommendation.get("recommended_ask"),
     )
 
-    tools = await get_print_vendor_tools()
-    args = {"reference": reference, "page_count": PAGE_COUNT}
-    result = await tools["submit_print_order"].ainvoke(args)
-    order = parse_single(result)
+    # A letter Compliance disapproved is rendered (a reviewer needs to see it,
+    # via GET /workflow/{id}/pdf) but never submitted for printing. Strictly
+    # `is False`: a missing verdict is not a disapproval.
+    held = compliance.get("approved") is False
+    tool_calls: list[dict] = []
+    order: dict = {}
+    if not held:
+        tools = await get_print_vendor_tools()
+        args = {"reference": reference, "page_count": PAGE_COUNT}
+        result = await tools["submit_print_order"].ainvoke(args)
+        order = parse_single(result)
+        tool_calls = [{"tool_name": "submit_print_order", "args": args, "result": order}]
 
     pdf_result = PdfGenerationResult(
         reference=reference,
@@ -62,6 +74,10 @@ async def generate_pdf(state: PipelineState) -> dict:
         page_count=PAGE_COUNT,
         qr_code_data=f"{DONATION_TRACKING_BASE_URL}/{reference}",
         required_disclosures=disclosures,
+        held=held,
+        hold_reason=(compliance.get("flagged_issues") or ["Compliance disapproved the letter"])
+        if held
+        else [],
         **order,
     ).model_dump()
 
@@ -71,7 +87,7 @@ async def generate_pdf(state: PipelineState) -> dict:
         step="generate_pdf",
         input_snapshot={"reference": reference, "mailing_address": mailing_address},
         output=pdf_result,
-        tool_calls=[{"tool_name": "submit_print_order", "args": args, "result": order}],
+        tool_calls=tool_calls,
         latency_ms=int((time.monotonic() - started) * 1000),
     )
     return {"pdf_result": pdf_result}

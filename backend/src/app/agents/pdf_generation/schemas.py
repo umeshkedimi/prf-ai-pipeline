@@ -13,8 +13,12 @@ class PdfGenerationResult(BaseModel):
     page_count: int
     qr_code_data: str
     required_disclosures: list[str]
-    vendor_order_id: str
-    tracking_number: str
-    postage_class: str
-    turnaround_days: int
-    cost: float
+    # Order confirmation fields are None when the letter was held: Compliance
+    # disapproved it, so nothing was submitted to the print vendor.
+    vendor_order_id: str | None = None
+    tracking_number: str | None = None
+    postage_class: str | None = None
+    turnaround_days: int | None = None
+    cost: float | None = None
+    held: bool = False
+    hold_reason: list[str] = []

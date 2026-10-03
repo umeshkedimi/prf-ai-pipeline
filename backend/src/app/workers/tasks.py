@@ -163,11 +163,11 @@ def _derive_terminal_status(result: dict, settings) -> tuple[str, float | None, 
     addr = result.get("address_result")
     if pdf is not None:
         # generate_pdf itself is deterministic — no LLM assessment of the PDF,
-        # so no confidence of its own. But it runs even when the upstream
-        # compliance review disapproved the letter (advisory, not blocking —
-        # see route_after_disclosures for the one gate that actually is
-        # blocking), so a disapproved letter that still got mailed needs to
-        # surface in the review queue rather than read as unremarkable.
+        # so no confidence of its own. It still runs when the upstream
+        # compliance review disapproved the letter (the revise loop is
+        # exhausted by now), but it renders without ordering print — see
+        # pdf_result["held"]. That held letter must surface in the review queue
+        # rather than read as unremarkable.
         if comp is not None and comp.get("approved") is False:
             confidence = comp.get("confidence")
             status = "needs_review"

@@ -143,3 +143,47 @@ async def test_mailing_address_falls_back_to_profile_fields(monkeypatch, _mock_a
     await agent_module.generate_pdf(state)
 
     assert render_calls[0]["mailing_address"] == "123 Maple St\nSpringfield, IL 62704"
+
+
+def _state(compliance: dict) -> dict:
+    return {
+        "workflow_run_id": "wf-held",
+        "donor_profile": {"first_name": "Eleanor"},
+        "personalization_result": {"salutation": "Dear Eleanor,", "body": "Thank you."},
+        "compliance_result": compliance,
+        "address_result": {},
+    }
+
+
+async def test_disapproved_letter_is_rendered_but_not_ordered(monkeypatch, _mock_audit_log):
+    vendor_tool = _mock_vendor(monkeypatch, _VENDOR_RESULT)
+    render_calls = _mock_render(monkeypatch)
+
+    compliance = {"approved": False, "flagged_issues": ["implies a guaranteed outcome"]}
+    result = await agent_module.generate_pdf(_state(compliance))
+
+    pdf_result = result["pdf_result"]
+    assert vendor_tool.calls == []  # nothing submitted to the print vendor
+    assert len(render_calls) == 1  # but the PDF exists for a reviewer to read
+    assert pdf_result["held"] is True
+    assert pdf_result["hold_reason"] == ["implies a guaranteed outcome"]
+    assert pdf_result["vendor_order_id"] is None and pdf_result["tracking_number"] is None
+    assert _mock_audit_log[0]["tool_calls"] == []
+
+
+async def test_held_letter_without_flagged_issues_still_records_a_reason(monkeypatch, _mock_audit_log):
+    _mock_vendor(monkeypatch, _VENDOR_RESULT)
+    _mock_render(monkeypatch)
+    result = await agent_module.generate_pdf(_state({"approved": False, "flagged_issues": []}))
+    assert result["pdf_result"]["hold_reason"] == ["Compliance disapproved the letter"]
+
+
+@pytest.mark.parametrize("compliance", [{"approved": True}, {}])
+async def test_approved_or_unjudged_letter_is_ordered(monkeypatch, _mock_audit_log, compliance):
+    """Only an explicit disapproval holds the letter — a missing verdict does not."""
+    vendor_tool = _mock_vendor(monkeypatch, _VENDOR_RESULT)
+    _mock_render(monkeypatch)
+    result = await agent_module.generate_pdf(_state(compliance))
+    assert len(vendor_tool.calls) == 1
+    assert result["pdf_result"]["held"] is False
+    assert result["pdf_result"]["vendor_order_id"] == "PV-TEST0001"
