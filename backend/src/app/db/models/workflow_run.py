@@ -12,7 +12,10 @@ from app.db.base import Base
 class WorkflowRun(Base):
     """id doubles as the LangGraph checkpointer `thread_id`.
 
-    status values: pending | running | awaiting_review | completed | needs_review | failed.
+    status values: pending | running | awaiting_review | completed | needs_review | failed |
+    discarded. `discarded` is terminal: a human decided a letter held back from print
+    (see pdf_result.held) should never be mailed. A held letter a human *releases*
+    becomes `completed` once its print order is placed.
     `awaiting_review` means the graph is genuinely paused mid-execution on a real
     LangGraph interrupt() and cannot proceed without a decision via POST
     .../review (see pending_review). `needs_review` is a purely advisory
@@ -22,7 +25,7 @@ class WorkflowRun(Base):
     actually terminated at: a below-threshold confidence at verification,
     address, recommendation, personalization, or compliance — or, the case
     worth knowing about, a run that reached `generate_pdf` while compliance
-    returned `approved: false`, so a letter that got printed despite a failed
+    returned `approved: false`, so a letter held back from print after a failed
     risk review surfaces in the queue instead of reading as unremarkable.
     """
 

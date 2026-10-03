@@ -22,3 +22,9 @@ class PdfGenerationResult(BaseModel):
     cost: float | None = None
     held: bool = False
     hold_reason: list[str] = []
+    # Set only when a human releases (or discards) a held letter — see
+    # POST /workflow/{id}/release.
+    released_by: str | None = None
+    released_at: str | None = None
+    release_notes: str | None = None
+    discarded_by: str | None = None

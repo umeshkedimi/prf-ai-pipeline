@@ -4,15 +4,19 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from datetime import UTC, datetime
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import write_audit_log
 from app.api.deps import get_db
 from app.api.deps_auth import get_current_user
 from app.db.models import AgentAuditLog, Campaign, Donor, User, WorkflowRun
 from app.schemas.donors import WorkflowRunBatchCreate, WorkflowRunBatchItem
 from app.schemas.workflow import (
     AuditLogEntry,
+    HeldLetterDecision,
     ReviewDecisionCreate,
     ReviewHistoryEntry,
     WorkflowRunCreate,
@@ -20,10 +24,12 @@ from app.schemas.workflow import (
     WorkflowRunSummary,
 )
 
-from app.workers.tasks import resume_workflow_after_review
+from app.workers.tasks import release_held_letter, resume_workflow_after_review
 from app.workers.tasks import run_workflow as run_workflow_task
 
-RunStatus = Literal["pending", "running", "awaiting_review", "completed", "needs_review", "failed"]
+RunStatus = Literal[
+    "pending", "running", "awaiting_review", "completed", "needs_review", "failed", "discarded"
+]
 
 router = APIRouter()
 
@@ -245,6 +251,79 @@ async def submit_review(
     decision = payload.model_dump()
     decision["reviewer"] = user.email
     resume_workflow_after_review.delay(str(run.id), decision)
+    return run
+
+
+@router.post("/workflow/{workflow_run_id}/release", response_model=WorkflowRunRead, status_code=202)
+async def release_held(
+    workflow_run_id: uuid.UUID,
+    payload: HeldLetterDecision,
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> WorkflowRun:
+    """A human decision on a letter held back from print because Compliance
+    disapproved it. Not /review: that endpoint resumes a graph paused on an
+    interrupt(), whereas this run already reached END — there is nothing to
+    resume, only one irreversible side effect (the vendor order) to allow or
+    forbid.
+
+    The run is claimed with a single conditional UPDATE, so two concurrent
+    requests cannot both win — the loser matches zero rows and gets a 409,
+    and no second order is placed."""
+    claimed_status = "running" if payload.action == "release" else "discarded"
+    claimed = await session.execute(
+        update(WorkflowRun)
+        .where(
+            WorkflowRun.id == workflow_run_id,
+            WorkflowRun.status == "needs_review",
+            WorkflowRun.result["pdf_generation"]["held"].astext == "true",
+        )
+        .values(status=claimed_status)
+        .returning(WorkflowRun.id)
+    )
+    if claimed.scalar_one_or_none() is None:
+        await session.rollback()
+        run = await session.get(WorkflowRun, workflow_run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"workflow run is '{run.status}' and has no held letter to decide on",
+        )
+    await session.commit()
+
+    # reviewer comes from the session, never the body (same rule as /review).
+    decision = {"action": payload.action, "notes": payload.notes, "reviewer": user.email}
+
+    if payload.action == "release":
+        try:
+            release_held_letter.delay(str(workflow_run_id), decision)
+        except Exception:
+            # Broker down: undo the claim rather than strand the run in `running`.
+            await session.execute(
+                update(WorkflowRun).where(WorkflowRun.id == workflow_run_id).values(status="needs_review")
+            )
+            await session.commit()
+            raise HTTPException(status_code=503, detail="could not enqueue the release; try again")
+    else:
+        run = await session.get(WorkflowRun, workflow_run_id)
+        pdf_result = {**run.result["pdf_generation"], "discarded_by": user.email}
+        run.result = {**run.result, "pdf_generation": pdf_result}
+        run.current_agent = "human_review"
+        run.completed_at = datetime.now(UTC)
+        await session.commit()
+        await write_audit_log(
+            workflow_run_id=str(workflow_run_id),
+            agent_name="human_review",
+            step="discard_held_letter",
+            input_snapshot={"hold_reason": pdf_result.get("hold_reason")},
+            output=pdf_result,
+            reasoning=payload.notes,
+            source_refs=[{"reviewer": user.email, "action": "discard", "stage": "print_release"}],
+        )
+
+    run = await session.get(WorkflowRun, workflow_run_id)
+    await session.refresh(run)
     return run
 
 

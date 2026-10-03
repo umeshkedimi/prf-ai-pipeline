@@ -25,6 +25,33 @@ def _format_mailing_address(profile: dict, address_result: dict) -> str:
     return "\n".join(line for line in lines if line)
 
 
+async def submit_print_order(reference: str, page_count: int) -> tuple[dict, list[dict]]:
+    """The pipeline's one irreversible side effect. Shared by generate_pdf and
+    by the held-letter release task, so there is exactly one place that places
+    an order. Idempotent at the vendor: the order is keyed on the deterministic
+    reference, so repeating the call cannot create a different order."""
+    tools = await get_print_vendor_tools()
+    args = {"reference": reference, "page_count": page_count}
+    order = parse_single(await tools["submit_print_order"].ainvoke(args))
+    return order, [{"tool_name": "submit_print_order", "args": args, "result": order}]
+
+
+def build_released_pdf_result(
+    pdf_result: dict, order: dict, reviewer: str, notes: str, released_at: str
+) -> dict:
+    """pdf_result after a human releases a held letter: order fields filled in,
+    `held` cleared, and who/when/why recorded. `hold_reason` is kept — the
+    record should still show what Compliance objected to."""
+    return {
+        **pdf_result,
+        **order,
+        "held": False,
+        "released_by": reviewer,
+        "released_at": released_at,
+        "release_notes": notes,
+    }
+
+
 async def generate_pdf(state: PipelineState) -> dict:
     """Deterministic: assembles the print-ready PDF from the drafted letter
     and its legally required disclosures, then submits it to the (mocked)
@@ -62,11 +89,7 @@ async def generate_pdf(state: PipelineState) -> dict:
     tool_calls: list[dict] = []
     order: dict = {}
     if not held:
-        tools = await get_print_vendor_tools()
-        args = {"reference": reference, "page_count": PAGE_COUNT}
-        result = await tools["submit_print_order"].ainvoke(args)
-        order = parse_single(result)
-        tool_calls = [{"tool_name": "submit_print_order", "args": args, "result": order}]
+        order, tool_calls = await submit_print_order(reference, PAGE_COUNT)
 
     pdf_result = PdfGenerationResult(
         reference=reference,

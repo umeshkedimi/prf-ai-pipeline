@@ -5,6 +5,8 @@ from typing import Any
 
 from langgraph.types import Command
 
+from app.agents.pdf_generation.agent import build_released_pdf_result, submit_print_order
+from app.core.audit import write_audit_log
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.base import reset_engine
@@ -28,6 +30,68 @@ def run_workflow(workflow_run_id: str) -> None:
 @celery_app.task(name="resume_workflow_after_review")
 def resume_workflow_after_review(workflow_run_id: str, decision: dict) -> None:
     asyncio.run(_run(workflow_run_id, resume_command=Command(resume=decision)))
+
+
+@celery_app.task(name="release_held_letter")
+def release_held_letter(workflow_run_id: str, decision: dict) -> None:
+    asyncio.run(_release(workflow_run_id, decision))
+
+
+async def _release(workflow_run_id: str, decision: dict) -> None:
+    """Places the print order for a letter a human released after Compliance
+    disapproved it. The endpoint already claimed the run atomically (status ->
+    running), so this is the only writer. On any failure the run goes back to
+    needs_review, still held, with the error recorded — a vendor outage must
+    not strand a run in `running` or silently lose the letter."""
+    await reset_engine()
+    run_uuid = uuid.UUID(workflow_run_id)
+    try:
+        try:
+            async with db_session() as session:
+                run = await session.get(WorkflowRun, run_uuid)
+                pdf_result = dict((run.result or {})["pdf_generation"])
+
+            order, tool_calls = await submit_print_order(
+                pdf_result["reference"], pdf_result["page_count"]
+            )
+            released_at = datetime.now(UTC)
+            released = build_released_pdf_result(
+                pdf_result, order, decision["reviewer"], decision["notes"], released_at.isoformat()
+            )
+
+            async with db_session() as session:
+                run = await session.get(WorkflowRun, run_uuid)
+                run.result = {**(run.result or {}), "pdf_generation": released}
+                run.status = "completed"
+                run.current_agent = "human_review"
+                run.error = None
+                run.completed_at = released_at
+                await session.commit()
+
+            await write_audit_log(
+                workflow_run_id=workflow_run_id,
+                agent_name="human_review",
+                step="release_held_letter",
+                input_snapshot={"hold_reason": pdf_result.get("hold_reason")},
+                output=released,
+                reasoning=decision["notes"],
+                source_refs=[
+                    {"reviewer": decision["reviewer"], "action": "release", "stage": "print_release"}
+                ],
+                tool_calls=tool_calls,
+            )
+            log.info("workflow_run.released", workflow_run_id=workflow_run_id)
+            pipeline_runs_total.labels(status="released").inc()
+        except Exception as exc:
+            async with db_session() as session:
+                run = await session.get(WorkflowRun, run_uuid)
+                run.status = "needs_review"
+                run.error = f"release failed: {exc}"
+                await session.commit()
+            log.error("workflow_run.release_failed", workflow_run_id=workflow_run_id, error=str(exc))
+            raise
+    finally:
+        await reset_engine()
 
 
 async def _run(workflow_run_id: str, resume_command: Command | None) -> None:

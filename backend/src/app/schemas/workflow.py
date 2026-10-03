@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import AgentAuditLog
 
@@ -25,6 +25,16 @@ class ReviewDecisionCreate(BaseModel):
     updated_ask_amount: float | None = None  # recommendation-stage review
     reviewer: str | None = None
     notes: str | None = None
+
+
+class HeldLetterDecision(BaseModel):
+    """Request body for POST /workflow/{id}/release. `notes` is required: a human
+    overruling (or confirming) Compliance's verdict must say why, and that
+    reason lands in the audit trail. The reviewer is never taken from the body;
+    the endpoint sets it from the authenticated session."""
+
+    action: Literal["release", "discard"]
+    notes: str = Field(min_length=3, max_length=2000)
 
 
 class AuditLogEntry(BaseModel):
