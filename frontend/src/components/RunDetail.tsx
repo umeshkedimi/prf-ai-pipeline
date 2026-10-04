@@ -48,8 +48,20 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
         postage_class: string | null;
         held?: boolean;
         hold_reason?: string[];
+        release_claim?: { claimed_at: string };
       }
     | undefined;
+
+  // Mirrors the backend's RELEASE_CLAIM_TTL_SECONDS default. Only decides whether
+  // to *offer* a retry; the endpoint is the authority and answers 409 if the
+  // claim is not actually stale.
+  const RELEASE_STALL_SECONDS = 300;
+  const claimedAt = pdfResult?.release_claim?.claimed_at;
+  const releaseStalled =
+    run.status === "running" &&
+    pdfResult?.held === true &&
+    claimedAt !== undefined &&
+    Date.now() - new Date(claimedAt).getTime() > RELEASE_STALL_SECONDS * 1000;
 
   return (
     <div>
@@ -129,6 +141,39 @@ export function RunDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <ResultCard key={key} stepKey={key} data={data as Record<string, unknown>} />
           ))}
         </section>
+      )}
+
+      {releaseStalled && (
+        <p
+          style={{
+            background: "var(--warn-bg)",
+            color: "var(--warn-text)",
+            border: "1px solid var(--warn-border)",
+            borderRadius: 6,
+            padding: 12,
+          }}
+        >
+          <strong>This release looks stalled.</strong> It has been running for over{" "}
+          {RELEASE_STALL_SECONDS / 60} minutes — the worker may have died mid-release. Retrying is
+          safe: the print order is keyed on this letter's reference, so it cannot be placed twice.{" "}
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await decideHeldLetter(id, {
+                  action: "release",
+                  notes: "Retry after a stalled release",
+                });
+                setMessage("Retry submitted. Refresh in a moment.");
+                load();
+              } catch (err) {
+                setMessage(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            Retry release
+          </button>
+        </p>
       )}
 
       {run.status === "needs_review" && pdfResult?.held && (
