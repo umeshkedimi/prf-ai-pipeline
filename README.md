@@ -120,8 +120,9 @@ These are the load-bearing decisions. Everything else follows from them.
 ├── backend/
 │   ├── src/app/
 │   │   ├── agents/<name>/      agent.py (graph nodes) + prompts.py + schemas.py
-│   │   │                       └── plus rules.py / rfm.py / render.py where the
-│   │   │                           agent has deterministic logic to keep out of the LLM
+│   │   │                       └── plus rules.py / rfm.py / render.py / eligibility.py /
+│   │   │                           reconcile.py where the agent has deterministic logic
+│   │   │                           (or a bounded LLM step) to keep out of the main node
 │   │   ├── graph/              builder.py (StateGraph + routing), state.py,
 │   │   │                       checkpointer.py, tracing.py
 │   │   ├── mcp_servers/        real FastMCP streamable-HTTP servers
@@ -130,14 +131,15 @@ These are the load-bearing decisions. Everything else follows from them.
 │   │   ├── rag/                pgvector retrieval — embeddings, store, retriever
 │   │   ├── evals/              harness (types, runner, scorers, report, store)
 │   │   │                       + suites/ (8 suites)
-│   │   ├── workers/            Celery app + tasks + Prometheus metrics
+│   │   ├── workers/            Celery app + tasks + Prometheus metrics, plus
+│   │   │                       release_claims.py / run_recovery.py (stuck-work recovery)
 │   │   ├── donors/             CSV ingestion (parse, validate, upsert) — Phase 9b
 │   │   ├── api/v1/endpoints/   FastAPI routes (auth, donors, workflow, health)
 │   │   ├── db/models/          SQLAlchemy models
 │   │   ├── schemas/            Pydantic request/response schemas
 │   │   └── core/               config, llm factory, audit, logging, telemetry, security
 │   ├── knowledge/              markdown corpus ingested into pgvector (6 docs)
-│   ├── alembic/versions/       8 migrations
+│   ├── alembic/versions/       9 migrations
 │   ├── scripts/                seed_db, seed_users, ingest_knowledge, run_evals, run_workflow_cli
 │   ├── evals/results/          baseline.json (committed), latest.json (gitignored)
 │   ├── storage/letters/        generated PDFs (gitignored)
@@ -167,10 +169,11 @@ Built **incrementally, phase by phase**, each phase fully working and demoable b
 | **7** ✅ | Review queue (`GET /workflow/reviews` with donor/campaign names and pagination) + per-run decision history (`review_history`, derived from the audit trail) + routing a disapproved compliance review to `needs_review` + `graph/builder.py` split into named verification/fulfillment units |
 | **8** ✅ | **8a** React review dashboard (`frontend/`). **8b** OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning API, Celery, and every agent node. **8c** CI (`.github/workflows/ci.yml`) — lint + offline unit suite on every push/PR |
 | **9** ✅ | **9a** Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** CSV donor ingestion (`POST /donors/ingest`, admin-only, upserts by `external_id`) staged — never auto-runs — plus `GET /donors/unrun` and `POST /workflow/run/batch` to explicitly trigger runs on staged donors |
+| **Hardening** ✅ | Post-Phase-9 work on making the agents safer to operate: a bounded compliance critique → revise loop (`revise_letter`); `reconcile_decision` (reviewer notes → letter guidance); a letter Compliance still disapproves is **held** from the print vendor and a human can release or discard it (`POST /workflow/{id}/release`); do-not-contact/suppression **enforced in code** (`enforce_eligibility`) and re-checked when a paused run resumes; atomic claims and stage binding on `/review` for concurrent reviewers; recovery for runs and releases whose worker died (`heartbeat_at`, migration 0009) |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
 
-All nine phases plus the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
+All nine phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
 
 ## The pipeline graph
 
@@ -212,8 +215,12 @@ START → fetch_core_data → gather_context → synthesize_verdict
                                                                           │      → revise_letter → review_letter_compliance
                                                                           └─ approved, or cap reached
                                                                                  → generate_pdf → END
-                                                                                [Print Vendor MCP]
+                                                                                [Print Vendor MCP; the order is
+                                                                                 skipped (letter held) if still
+                                                                                 disapproved]
 ```
+
+Every `human_review` exit passes through `reconcile_decision` before the resume routing shown above. It turns the reviewer's notes into letter-writing guidance (skipped for a reject, at the compliance stage, and for empty notes) and cannot change where the run goes — with one exception owned by `human_review` itself: a donor who became do-not-contact or suppressed *while the run was paused* ends the run whatever the reviewer decided.
 
 In `graph/builder.py` these are assembled as two named units onto one flat `StateGraph` — a **verification unit** (`fetch_core_data` → `gather_context` → `synthesize_verdict` → `verify_address` → `assess_and_normalize`) and a **fulfillment unit** (`compute_rfm` → `recommend_ask` → `personalize_letter` → `gather_disclosures` → `review_letter_compliance` → `generate_pdf`), wired through the shared `human_review` gate.
 
@@ -362,7 +369,7 @@ Keys are omitted for agents that never ran, so a reviewer sees the whole picture
 | `donations` | Giving history — the input to RFM scoring |
 | `campaigns` | Campaign metadata |
 | `suppressions` | Do-not-contact / deceased / bounced suppression flags, read as fact by `fetch_core_data` |
-| `workflow_runs` | One row per pipeline run: `status`, `current_agent`, `confidence`, `result` (JSONB), `pending_review` (JSONB), timestamps, `error` |
+| `workflow_runs` | One row per pipeline run: `status`, `current_agent`, `confidence`, `result` (JSONB), `pending_review` (JSONB), timestamps, `heartbeat_at` (last sign of life; see *Stalled runs*), `error`. Status also includes `discarded` — a held letter a human decided never to mail |
 | `agent_audit_log` | **One row per agent decision** — input snapshot, output, confidence, reasoning, tool calls, model, latency, `input_tokens`/`output_tokens`. The explainability trail |
 | `knowledge_chunks` | pgvector store — heading-chunked campaign knowledge, 1536-dim, HNSW cosine index. **No PII** |
 | `eval_runs` | Persisted eval history: suite, metrics, `git_sha`, `llm_model`, `judge_model` |
@@ -556,7 +563,7 @@ npm run dev            # http://localhost:5173
 
 The API's CORS middleware allow-lists `http://localhost:5173` by default (`CORS_ALLOWED_ORIGINS` in the root `.env`) — no extra setup for local dev.
 
-**What it does:** starts a run via `POST /workflow/run`, so a full loop can be driven from the browser rather than curl; lists `GET /workflow/reviews` with donor names and CRM codes plus pagination; a separate **All runs** tab lists `GET /workflow/runs` — every status, not just what's awaiting action, newest first, with a status filter — since a `completed` run by definition never enters the review queue and otherwise had no listing at all, only "paste its id if you already know it"; opens a run via `GET /workflow/{id}` (and its full audit trail on demand via `?verbose=true`), from either list or by pasting a run ID; submits decisions via `POST /workflow/{id}/review`, with the form's fields (`updated_address` / `updated_ask_amount`) conditional on which of the three stages paused; renders per-stage result cards (confidence, reasoning, or `flagged_issues` when a compliance review disapproved) with raw JSON behind a toggle; links to the generated PDF via `GET /workflow/{id}/pdf`; shows a release/discard form (reason required) for a held letter via `POST /workflow/{id}/release`; and shows `review_history` — every past decision on that run, not just the one that last resolved it.
+**What it does:** starts a run via `POST /workflow/run`, so a full loop can be driven from the browser rather than curl; lists `GET /workflow/reviews` with donor names and CRM codes plus pagination; a separate **All runs** tab lists `GET /workflow/runs` — every status, not just what's awaiting action, newest first, with a status filter — since a `completed` run by definition never enters the review queue and otherwise had no listing at all, only "paste its id if you already know it"; opens a run via `GET /workflow/{id}` (and its full audit trail on demand via `?verbose=true`), from either list or by pasting a run ID; submits decisions via `POST /workflow/{id}/review`, with the form's fields (`updated_address` / `updated_ask_amount`) conditional on which of the three stages paused; renders per-stage result cards (confidence, reasoning, or `flagged_issues` when a compliance review disapproved) with raw JSON behind a toggle; links to the generated PDF via `GET /workflow/{id}/pdf`; shows a release/discard form (reason required) for a held letter via `POST /workflow/{id}/release`, and a Retry button when a release has stalled; sends the review `stage` with every decision and surfaces a `409` (another reviewer already decided) instead of swallowing it; and shows `review_history` — every past decision on that run, not just the one that last resolved it.
 
 A submitted decision resumes the graph asynchronously via Celery, so the UI offers an explicit Refresh rather than faking a synchronous result.
 
@@ -844,13 +851,13 @@ uv run python scripts/run_workflow_cli.py review --workflow-run-id <id> --action
 
 The three interrupt stages are exercised by different donors on purpose: d-0007/d-0009 pause on the address and never reach a major-gift decision; d-0011 sails through address checks and pauses purely on the ask amount; d-0012 sails through both and pauses purely on state registration. d-0010 is the instructive near-miss — also undeliverable, but *confidently* so, which is a different thing from uncertain and correctly routes without a human.
 
-Every donor clearing all three gates continues through `personalize_letter`, `review_letter_compliance`, and `generate_pdf`. Recommendation (0.50), personalization (0.60), and compliance's letter-risk review (0.75) are advisory-gated rather than blocking, so a run can finish even when one of those confidences was low — each later stage runs regardless of the one before it.
+Every donor clearing all three gates continues through `personalize_letter`, `review_letter_compliance`, and `generate_pdf`. Recommendation (0.50), personalization (0.60), and compliance's letter-risk review (0.75) are advisory-gated rather than blocking, so a run can finish even when one of those confidences was low (a letter Compliance *disapproves* still finishes, but its print order is held) — each later stage runs regardless of the one before it.
 
 ## Tests and CI
 
 ```bash
 cd backend
-uv run pytest                 # 150 unit tests, mocked LLM + MCP + retriever (~2.3s)
+uv run pytest                 # 202 unit tests, mocked LLM + MCP + retriever (~2.3s)
 uv run pytest -m integration  # real stack: live LLM + embeddings, MCP servers, Postgres (~4min)
 ```
 
@@ -943,7 +950,9 @@ Decisions worth defending, with the counter-argument stated rather than hidden:
 
 **Bounded retries, added on evidence.** Local inference intermittently produced two specific failures — `json.loads('')` inside the tool loop, and structured-output parse failures where the model emitted `confidence: 2` against a `0.0–1.0` schema. Three independent eval sweeps measured the rate (~5–9% of runs) *before* any retry was written. The fix is bounded (3 attempts, not infinite) so a genuinely broken input still fails loudly. This is the pattern the whole eval framework exists to enable: measure, then fix, then re-measure.
 
-**Advisory vs. blocking is a spectrum, and most things are advisory.** Only two gates block. Everything else — verification confidence, duplicate detection, recommendation confidence, personalization groundedness, and even compliance's own `approved: false` — sets `needs_review` and lets the pipeline finish. A pipeline that halts on every uncertainty is a pipeline nobody runs.
+**Advisory vs. blocking is a spectrum, and most things are advisory.** The *pausing* gates are the three human-review triggers (address confidence, major-gift ask, unregistered state), plus an eligibility flag that turns up during a pause. Everything else — verification confidence, duplicate detection, recommendation confidence, personalization groundedness — sets `needs_review` and lets the pipeline finish. Compliance's `approved: false` sits in between: it first triggers a bounded rewrite loop, and if the letter is still disapproved the run finishes but **the print order is withheld** until a human releases or discards it. The reasoning is to block the one irreversible action rather than the whole pipeline: a pipeline that halts on every uncertainty is a pipeline nobody runs, but a mailed letter cannot be recalled.
+
+**The revise loop routes on a model-produced boolean, on purpose.** Everywhere else a blocking decision routes off a deterministic value. `route_after_compliance` reads the model's `approved`, which breaks that rule, and is acceptable only because it is advisory and bounded: a misjudgement costs one extra or one skipped draft, the cap is a plain counter, and the blocking registration gate never reads model output.
 
 **No prompt caching.** Considered and rejected: the minimum cacheable prefix on the relevant hosted models is 2048 tokens and these system prompts are under that, so it would silently never cache.
 
@@ -960,6 +969,10 @@ Stated plainly, because a portfolio piece that hides its edges is less useful th
 - **`core/config.py`'s in-code defaults still name `google_genai`**, while `.env.example` and the eval baseline use Ollama. A copied `.env` wins, so this only affects running with no `.env` at all.
 - **Celery is pinned to `--concurrency=1`.** Correct for this demo and required by the non-fork-aware Prometheus registry, but it means throughput is one run at a time. Scaling out needs a multiprocess metrics collector.
 - **`ruff format` has never been run.** There is a `line-length = 100` config, but the code was hand-wrapped and a format sweep would rewrite ~half the files. `ruff check` is clean and is what CI enforces; the format sweep is deferred to its own commit so it never mixes with a behavior change.
+- **No periodic sweeper for stuck work.** Runs and releases whose worker died are recovered at worker start (immediately and again after the TTL) and on demand, not on a timer — a worker that dies and is never restarted waits. A Celery beat process would close it; it is new infrastructure in compose and k8s, so it was left out rather than added unverified. Runs from before migration 0009 have no heartbeat and are never auto-recovered.
+- **Held letters rely on an LLM verdict in both directions.** A false disapproval holds a fine letter (a human releases it, with a recorded reason); a false approval prints a bad one. Both reviewer roles may release — no policy distinguishes them yet.
+- **The evals do not yet measure the newer agentic behavior.** There is no suite for the revise loop's success rate or for how well `reconcile_decision`'s guidance is followed (a live run showed it is followed only partly), and the trajectory eval strips rewrite cycles from the path rather than scoring them. The committed baseline was last swept before the hardening pass; nothing it measures was intended to change, but it has not been re-swept to confirm.
+- **A paused run is a snapshot.** Only the do-not-contact/suppression flags are re-read on resume. Address and state-registration data are not refreshed, and a paused run resumes on whatever code is deployed then (see *Concurrent reviewers, and a paused run that goes stale* under Human review).
 - **Compliance logic is illustrative, not legal advice.** State registration rules are modeled from fixtures to demonstrate the routing pattern.
 
 ---
