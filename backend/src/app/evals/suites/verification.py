@@ -11,7 +11,13 @@ Runs the three verification nodes directly rather than through the graph:
 cheaper, and it isolates this agent from downstream routing.
 """
 
+import uuid
+
+from sqlalchemy import select
+
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
+from app.db.models import AgentAuditLog
+from app.db.session import db_session
 from app.evals.scorers import CalibrationAggregator, ClassificationAggregator, exact_match
 from app.evals.suites._common import create_workflow_run, resolve_donor_id
 from app.evals.types import EvalCase, EvalSuite
@@ -42,6 +48,26 @@ CASES = [
 ]
 
 
+async def _raw_model_output(workflow_run_id: str, enforced: dict) -> dict:
+    """The model's verdict *before* enforce_eligibility corrected it.
+
+    synthesize_verdict records it in the audit trail only when the guard
+    changed something, so an absent entry means the model complied on its own
+    and the enforced verdict already is the raw one. Scoring the enforced
+    verdict would measure the guard — which makes recall_ineligible 1.000 by
+    construction — rather than whether the model follows the rule unaided."""
+    async with db_session() as session:
+        result = await session.execute(
+            select(AgentAuditLog.output)
+            .where(AgentAuditLog.workflow_run_id == uuid.UUID(workflow_run_id))
+            .where(AgentAuditLog.step == "synthesize_verdict")
+            .order_by(AgentAuditLog.created_at.desc())
+            .limit(1)
+        )
+        audited = result.scalar_one_or_none() or {}
+    return audited.get("model_output_raw") or enforced
+
+
 async def run_case(case: EvalCase) -> dict:
     donor_id = await resolve_donor_id(case.inputs["external_id"])
     workflow_run_id = await create_workflow_run(donor_id)
@@ -55,9 +81,11 @@ async def run_case(case: EvalCase) -> dict:
     state.update(await gather_context(state))
     state.update(await synthesize_verdict(state))
 
-    verdict = state["verification_result"]
+    enforced = state["verification_result"]
+    verdict = await _raw_model_output(workflow_run_id, enforced)
     return {
         "eligible": verdict["eligible"],
+        "eligible_after_guard": enforced["eligible"],
         "confidence": verdict["confidence"],
         "is_duplicate": verdict.get("is_duplicate"),
         "is_suspicious": verdict.get("is_suspicious"),

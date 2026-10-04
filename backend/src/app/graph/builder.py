@@ -21,7 +21,8 @@ from app.graph.tracing import traced_node
 def route_after_verification(state: PipelineState) -> str:
     """Donor Verification's own low-confidence outcomes (duplicate/suspicious)
     are advisory only — they don't block. Only an ineligible donor (do-not-
-    contact/suppressed, both enforced deterministically upstream) skips the
+    contact/suppressed, forced ineligible in code by `enforce_eligibility` in
+    synthesize_verdict, not merely prompted) skips the
     rest of the pipeline entirely; there's no point address-checking someone
     we're not going to mail."""
     verdict = state.get("verification_result") or {}

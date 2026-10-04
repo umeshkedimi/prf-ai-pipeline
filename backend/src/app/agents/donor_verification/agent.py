@@ -3,6 +3,7 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
+from app.agents.donor_verification.eligibility import enforce_eligibility
 from app.agents.donor_verification.prompts import (
     GATHER_CONTEXT_SYSTEM_PROMPT,
     SYNTHESIZE_VERDICT_SYSTEM_PROMPT,
@@ -11,8 +12,11 @@ from app.agents.donor_verification.schemas import VerificationResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
 from app.core.llm import ainvoke_structured, get_llm, token_usage
+from app.core.logging import get_logger
 from app.graph.state import PipelineState
 from app.mcp_clients.crm_client import get_crm_tools, parse_list, parse_single
+
+log = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 4
 AGENT_NAME = "donor_verification"
@@ -119,7 +123,9 @@ async def gather_context(state: PipelineState) -> dict:
 
 
 async def synthesize_verdict(state: PipelineState) -> dict:
-    """Structured-output LLM call, no tools — produces the final VerificationResult."""
+    """Structured-output LLM call, no tools — produces the final VerificationResult.
+    do_not_contact / suppression are then enforced in code (see eligibility.py)
+    rather than trusted to the prompt."""
     started = time.monotonic()
     settings = get_settings()
     llm = get_llm()
@@ -140,14 +146,29 @@ async def synthesize_verdict(state: PipelineState) -> dict:
     ]
 
     result, usage = await ainvoke_structured(llm, VerificationResult, messages)
-    verdict = result.model_dump()
+    raw_output = result.model_dump()
+    verdict, corrections = enforce_eligibility(state.get("donor_profile") or {}, raw_output)
+    if corrections:
+        log.warning(
+            "verification.eligibility_corrected",
+            workflow_run_id=state["workflow_run_id"],
+            corrections=corrections,
+        )
+
+    # Same audit convention as recommend_ask: the pre-enforcement output is
+    # recorded only when the guard actually changed something, so the eval
+    # suite can score the model unaided rather than the guard.
+    audit_output = dict(verdict)
+    if corrections:
+        audit_output["deterministic_corrections"] = corrections
+        audit_output["model_output_raw"] = raw_output
 
     await write_audit_log(
         workflow_run_id=state["workflow_run_id"],
         agent_name=AGENT_NAME,
         step="synthesize_verdict",
         input_snapshot=input_snapshot,
-        output=verdict,
+        output=audit_output,
         confidence=verdict["confidence"],
         reasoning="; ".join(verdict["reasoning"]),
         model=settings.llm_model,
