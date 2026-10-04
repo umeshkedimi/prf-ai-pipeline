@@ -47,3 +47,7 @@ class WorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last sign of life from whatever is executing the graph: stamped when a run
+    # starts/resumes and at the start of every node. A `running` run whose heartbeat
+    # has gone quiet is stalled (worker died) — see workers/run_recovery.py.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

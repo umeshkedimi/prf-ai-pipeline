@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import write_audit_log
@@ -251,7 +251,7 @@ async def submit_review(
             WorkflowRun.status == "awaiting_review",
             WorkflowRun.pending_review["stage"].astext == payload.stage,
         )
-        .values(status="running")
+        .values(status="running", heartbeat_at=func.now())
         .returning(WorkflowRun.id)
     )
     if claimed.scalar_one_or_none() is None:

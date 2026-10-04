@@ -14,6 +14,7 @@ from app.db.models import WorkflowRun
 from app.db.session import db_session
 from app.graph.builder import build_graph
 from app.workers.celery_app import celery_app
+from app.workers.run_recovery import find_stalled_run_ids, reclaim_stalled_run
 from app.workers.release_claims import (
     build_claim,
     find_stale_release_ids,
@@ -35,6 +36,40 @@ def run_workflow(workflow_run_id: str) -> None:
 @celery_app.task(name="resume_workflow_after_review")
 def resume_workflow_after_review(workflow_run_id: str, decision: dict) -> None:
     asyncio.run(_run(workflow_run_id, resume_command=Command(resume=decision)))
+
+
+@celery_app.task(name="continue_stalled_run")
+def continue_stalled_run(workflow_run_id: str) -> None:
+    """Continues a run from its last checkpoint after its worker died."""
+    asyncio.run(_run(workflow_run_id, resume_command=None, recovering=True))
+
+
+@celery_app.task(name="recover_stalled_runs")
+def recover_stalled_runs() -> int:
+    """Finds `running` pipeline runs whose heartbeat has gone quiet (their worker
+    died mid-graph) and re-enqueues each to continue from its checkpoint. Sent
+    when a worker starts and again once the stall TTL has elapsed — see
+    celery_app's worker_ready hook for why both."""
+    return asyncio.run(_recover_stalled_runs())
+
+
+async def _recover_stalled_runs() -> int:
+    await reset_engine()
+    recovered = 0
+    try:
+        async with db_session() as session:
+            stalled_ids = await find_stalled_run_ids(session)
+        for run_id in stalled_ids:
+            async with db_session() as session:
+                won = await reclaim_stalled_run(session, run_id)
+                await session.commit()
+            if won:
+                continue_stalled_run.delay(str(run_id))
+                recovered += 1
+                log.warning("workflow_run.stall_recovered", workflow_run_id=str(run_id))
+    finally:
+        await reset_engine()
+    return recovered
 
 
 @celery_app.task(name="release_held_letter")
@@ -146,7 +181,23 @@ async def _release(workflow_run_id: str, decision: dict) -> None:
         await reset_engine()
 
 
-async def _run(workflow_run_id: str, resume_command: Command | None) -> None:
+def pick_graph_input(
+    resume_command: Command | None, recovering: bool, checkpoint_values: dict | None, initial: dict
+) -> Any:
+    """What to hand graph.ainvoke. A review decision resumes an interrupt; a fresh
+    run starts from `initial`. A *recovered* run continues from its checkpoint
+    (input None) — unless the worker died before the first checkpoint was
+    written, in which case there is nothing to continue and it starts fresh."""
+    if resume_command is not None:
+        return resume_command
+    if recovering and checkpoint_values:
+        return None
+    return initial
+
+
+async def _run(
+    workflow_run_id: str, resume_command: Command | None, recovering: bool = False
+) -> None:
     await reset_engine()
     try:
         run_uuid = uuid.UUID(workflow_run_id)
@@ -158,6 +209,7 @@ async def _run(workflow_run_id: str, resume_command: Command | None) -> None:
                 return
             run.status = "running"
             run.started_at = run.started_at or datetime.now(UTC)
+            run.heartbeat_at = datetime.now(UTC)
             run.pending_review = None
             await session.commit()
             donor_id = str(run.donor_id)
@@ -168,29 +220,29 @@ async def _run(workflow_run_id: str, resume_command: Command | None) -> None:
             workflow_run_id=workflow_run_id,
             donor_id=donor_id,
             resuming=resume_command is not None,
+            recovering=recovering,
         )
 
         try:
-            graph_input: Any = (
-                resume_command
-                if resume_command is not None
-                else {
-                    "workflow_run_id": workflow_run_id,
-                    "donor_id": donor_id,
-                    "campaign_id": campaign_id,
-                }
-            )
+            initial = {
+                "workflow_run_id": workflow_run_id,
+                "donor_id": donor_id,
+                "campaign_id": campaign_id,
+            }
             async with build_graph() as graph:
+                config = {"configurable": {"thread_id": workflow_run_id}}
+                checkpoint_values = (
+                    (await graph.aget_state(config)).values if recovering else None
+                )
+                graph_input = pick_graph_input(
+                    resume_command, recovering, checkpoint_values, initial
+                )
                 # durability="sync" persists each checkpoint before the next
                 # step starts, not while it executes (the default). Matters
                 # far more here than in a single-agent graph: an interrupted
                 # workflow's paused state might not resume for hours or days
                 # and absolutely cannot be lost.
-                result = await graph.ainvoke(
-                    graph_input,
-                    config={"configurable": {"thread_id": workflow_run_id}},
-                    durability="sync",
-                )
+                result = await graph.ainvoke(graph_input, config=config, durability="sync")
 
             await _handle_result(run_uuid, workflow_run_id, result)
 

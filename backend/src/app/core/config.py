@@ -130,6 +130,10 @@ class Settings(BaseSettings):
     # stalled (worker or API died mid-release) and can be taken over and retried.
     # Must comfortably exceed a normal release, which is one vendor call.
     release_claim_ttl_seconds: int = 300
+    # How long a `running` pipeline run may go without a heartbeat (one is written
+    # at the start of every node) before it counts as stalled and is resumed from
+    # its checkpoint. Must exceed the slowest single node, not a whole run.
+    run_stall_ttl_seconds: int = 600
     # A recommended ask at or above this dollar amount is a major-gift decision
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0

@@ -41,7 +41,20 @@ celery_app.conf.update(
 
 @worker_ready.connect
 def _recover_stalled_work_on_startup(sender=None, **_kwargs) -> None:
-    """A worker that crashed mid-release leaves a run in `running` that nothing
-    will advance; the restarted worker is the natural moment to look. Enqueued
-    rather than run inline so a slow DB can't delay the worker becoming ready."""
-    celery_app.send_task("recover_stale_releases")
+    """A worker that crashed mid-task leaves runs in `running` that nothing will
+    advance; the restarted worker is the natural moment to look.
+
+    Each sweep is sent twice: now, and again once the stall TTL has elapsed. The
+    second matters more than it looks — a worker that crashes and restarts
+    quickly leaves work whose heartbeat/claim is still *fresh* at startup, so an
+    immediate sweep correctly ignores it (it cannot tell dead from slow). Only
+    after the TTL can it be called stalled, so the delayed sweep is what catches
+    the common case. Enqueued rather than run inline so a slow DB can't delay
+    the worker becoming ready."""
+    settings = get_settings()
+    for name, ttl in (
+        ("recover_stale_releases", settings.release_claim_ttl_seconds),
+        ("recover_stalled_runs", settings.run_stall_ttl_seconds),
+    ):
+        celery_app.send_task(name)
+        celery_app.send_task(name, countdown=ttl + 15)
