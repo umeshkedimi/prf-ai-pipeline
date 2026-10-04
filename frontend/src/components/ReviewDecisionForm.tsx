@@ -15,13 +15,16 @@ export function ReviewDecisionForm({
   const [updatedAddress, setUpdatedAddress] = useState("");
   const [updatedAskAmount, setUpdatedAskAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setError(null);
     try {
       const decision: ReviewDecisionCreate = {
         action,
+        stage,
         reviewer: reviewer || undefined,
         notes: notes || undefined,
       };
@@ -32,6 +35,9 @@ export function ReviewDecisionForm({
         decision.updated_ask_amount = Number(updatedAskAmount);
       }
       await onSubmit(decision);
+    } catch (err) {
+      // A 409 here usually means another reviewer already decided this pause.
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
@@ -78,6 +84,7 @@ export function ReviewDecisionForm({
       <button type="submit" disabled={submitting}>
         {submitting ? "Submitting…" : "Submit decision"}
       </button>
+      {error && <span style={{ color: "#b91c1c" }}>{error}</span>}
     </form>
   );
 }

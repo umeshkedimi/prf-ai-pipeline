@@ -277,6 +277,14 @@ The workflow genuinely cannot proceed until a decision (`approve`/`reject`/`modi
 - **Audited under its own agent name** (`decision_reconciliation`), not `human_review` — `review_history` is built from `human_review` rows, and a reconciliation is not a human decision.
 - **Guidance is advisory, not guaranteed.** A live d-0011 run with "keep it gentle, don't pressure" produced a letter that acknowledged long-standing loyalty but still said "step up this commitment" — the model follows guidance imperfectly, and the ask itself is fixed by the ladder. Reviewers who need a different amount use `modify`.
 
+### Concurrent reviewers, and a paused run that goes stale
+
+**Two reviewers on the same pause.** `POST /review` claims the run with one conditional `UPDATE` (`awaiting_review` → `running`) that also requires the decision's `stage` to equal the stage the run is paused at, so exactly one reviewer wins and the other gets `409`. This was a real bug, not a theoretical one: with no claim, both decisions were enqueued, and the second resume was consumed by whichever interrupt the graph reached *next* — checked directly against LangGraph, a reject meant for the address stage was applied to the recommendation stage; if no further pause existed it was silently dropped, with a `202` and a clean audit trail. `stage` is required precisely because the request used to carry nothing tying a decision to the pause it was made for. If the broker is down the claim is handed back (`503`) rather than stranding the run in `running`.
+
+**Data that changes while a run is paused.** `donor_profile` is a snapshot from before the pause, and a run can wait days. Re-reading everything on resume would make a reviewer's decision about data they never saw, so only the two *hard* eligibility facts are re-read: after any non-reject decision `human_review` re-fetches the donor's `do_not_contact` / `is_suppressed` flags, and a donor who opted out or was suppressed in the meantime ends the run (`completed`, nothing mailed, `verification_result.revoked_during_review`) whatever the reviewer decided. The recheck is recorded in the audit row. A reject skips it — it ends the run anyway, and a CRM outage shouldn't be able to block a reject; for the others a failed lookup fails the run loudly, the same as any other CRM call, rather than silently skipping the check.
+
+Deliberately not handled: other snapshotted data (address, state registration) is not refreshed; routing thresholds read at resume time, so a config change during a pause applies from the next routing decision; and a paused run resumes on the *new* code after a deploy — adding a node is safe (that is how `reconcile_decision` shipped), renaming or removing one a paused run depends on is not, and there is no pause expiry.
+
 ### Releasing a held letter
 
 A letter Compliance still disapproves after the revise loop is rendered but never ordered (`pdf_result.held`), leaving the run in `needs_review`. `POST /workflow/{id}/release` lets a human decide it: **release** places the print order and completes the run; **discard** closes it as `discarded` and nothing is ever mailed. A reason is required either way, and the reviewer identity comes from the session, not the body.
@@ -373,7 +381,7 @@ Base path: `/api/v1`. Interactive docs at `http://localhost:8000/docs`.
 | `GET` | `/workflow/reviews` | Review queue — `awaiting_review` + `needs_review` runs, oldest first. Query: `status`, `limit` (default 50), `offset` |
 | `GET` | `/workflow/runs` | Full run history, any status — unlike `/reviews`, not scoped to what needs action. Newest first. Query: `status` (any of the six), `limit` (default 50), `offset` |
 | `GET` | `/workflow/{id}` | Full run: status, `result`, `pending_review`, `review_history`. Add `?verbose=true` for the audit log |
-| `POST` | `/workflow/{id}/review` | Submit a human decision. Returns `202`; resumes asynchronously via Celery |
+| `POST` | `/workflow/{id}/review` | Submit a human decision. `stage` is required and must match the stage the run is paused at. Returns `202`; resumes asynchronously via Celery. `409` if another reviewer already decided this pause or the stage doesn't match |
 | `POST` | `/workflow/{id}/release` | Decide a held letter: `{action: release\|discard, notes}` (notes required). `202` on release (order placed asynchronously), `409` if the run has no held letter or was already decided |
 | `GET` | `/workflow/{id}/pdf` | Stream the generated letter PDF. `404` if the run never produced one |
 | `GET` | `/metrics` | Prometheus exposition (API request metrics) |
@@ -670,7 +678,7 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Beare
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"action": "modify", "updated_address": "1225 Pine St, Denver, CO 80218", "notes": "Confirmed via phone"}'
+  -d '{"action": "modify", "stage": "address", "updated_address": "1225 Pine St, Denver, CO 80218", "notes": "Confirmed via phone"}'
 # -> 202, re-enqueued to resume from exactly where it stopped
 
 curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
@@ -698,7 +706,7 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Beare
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"action": "modify", "updated_ask_amount": 500, "notes": "capped pending gift-officer call"}'
+  -d '{"action": "modify", "stage": "recommendation", "updated_ask_amount": 500, "notes": "capped pending gift-officer call"}'
 # -> 202 — the ask is now positive, so this re-enqueues into personalize_letter,
 #    not straight to completion (recommendation is no longer terminal)
 
@@ -729,7 +737,7 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Beare
 
 curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"action": "approve", "notes": "registration filed this week, confirmed with state AG office"}'
+  -d '{"action": "approve", "stage": "compliance", "notes": "registration filed this week, confirmed with state AG office"}'
 # -> 202 — approve/modify continues into the letter-content review and PDF
 #    generation; a reject ends the run, legally blocked. The decision is
 #    recorded in result.human_review regardless of outcome.

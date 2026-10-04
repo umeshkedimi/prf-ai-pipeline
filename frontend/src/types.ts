@@ -65,6 +65,8 @@ export interface WorkflowRunRead {
 
 export interface ReviewDecisionCreate {
   action: "approve" | "reject" | "modify";
+  // Binds the decision to the pause it was made for; the API refuses a mismatch.
+  stage: "address" | "recommendation" | "compliance";
   updated_address?: string;
   updated_ask_amount?: number;
   reviewer?: string;
