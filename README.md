@@ -61,7 +61,7 @@ Doing this by hand is slow and error-prone in ways that carry real consequence: 
 ```mermaid
 flowchart LR
   UI["React dashboard<br/>:5173"] -->|REST| API["FastAPI :8000"]
-  CLI["run_workflow_cli.py"] --> GRAPH["LangGraph StateGraph<br/>12 nodes / 7 agents"]
+  CLI["run_workflow_cli.py"] --> GRAPH["LangGraph StateGraph<br/>14 nodes / 7 agents"]
 
   API -->|"enqueue only —<br/>never calls an LLM"| Q[["Redis broker"]]
   Q --> W["Celery worker"]
@@ -174,7 +174,7 @@ All nine phases plus the evaluation framework are complete — see [Authenticati
 
 ## The pipeline graph
 
-12 nodes across 7 agents. Every node is a real checkpoint boundary — the graph can crash and resume at any of them.
+14 nodes across 7 agents (Donor Verification 3, Address Intelligence 2, Donation Recommendation 2, Campaign Personalization 2, Compliance 2, PDF Generation 1, Human Review 2). Every node is a real checkpoint boundary — the graph can crash and resume at any of them.
 
 ```
 START → fetch_core_data → gather_context → synthesize_verdict
@@ -225,7 +225,7 @@ This is deliberately a *code-organization* split, not LangGraph nested subgraphs
 
 1. **`fetch_core_data`** — deterministic `get_donor_profile` MCP call. `do_not_contact`/suppression flags are read as-is, never inferred by the LLM.
 2. **`gather_context`** — an LLM bound to `get_donation_history` + `find_potential_duplicate_donors` (via `langchain-mcp-adapters`, a real streamable-HTTP MCP server), in a bounded tool-calling loop.
-3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). Compliance rules (do-not-contact, suppression) are enforced by explicit instruction, never left to model judgment. "Eligible" is scoped strictly to compliance/legitimacy — the model is explicitly told *not* to factor in address deliverability, which is a separate downstream concern.
+3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). The prompt tells the model do-not-contact and suppressed donors are ineligible, but that is **not** left to the prompt: `enforce_eligibility` (`agents/donor_verification/eligibility.py`) forces `eligible` to `False` in code whenever the CRM flag is set, and records the model's pre-correction verdict in the audit trail when it had to. It is one-directional — it can only remove eligibility, never grant it — and leaves confidence untouched. (This was previously only prompted, while the routing docstring described it as enforced; the same instructed-not-enforced gap the ask-ladder guard closed.) "Eligible" is scoped strictly to compliance/legitimacy — the model is explicitly told *not* to factor in address deliverability, which is a separate downstream concern.
 
 **Address Intelligence** (Phase 2) — 2 nodes, only reached if the donor is eligible:
 
@@ -241,7 +241,7 @@ The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history
 
 **RAG** (Phase 3) — semantic search over *unstructured campaign knowledge* only (impact stats, program outcomes, success stories, ask-strategy and stewardship guidelines) in `backend/knowledge/`, chunked by heading, embedded with OpenAI `text-embedding-3-small` and stored in a pgvector `knowledge_chunks` table with an HNSW cosine index. **Donor PII is never embedded** — structured donor data stays in the relational tables. Embeddings are provider-agnostic via LangChain `init_embeddings`, mirroring how `get_llm()` handles chat models. Re-ingest is idempotent (delete-and-reinsert per document).
 
-**Campaign Personalization** (Phase 4) — 1 node, reached once an ask survives the recommendation stage:
+**Campaign Personalization** (Phase 4) — 2 nodes (`personalize_letter`, plus `revise_letter` for the bounded compliance rewrite loop), reached once an ask survives the recommendation stage:
 
 1. **`personalize_letter`** — a deterministic tone lookup keyed on the donor's RFM segment (gentle/reconnecting for lapsed, an invitation to step up for loyal, personal/relationship-based for major — the same segment vocabulary `recommend_ask` uses), then an LLM drafts the appeal letter within that fixed tone, grounded in retrieved stewardship and impact knowledge. The model never chooses the tone and never invents a cited figure; it only drafts. A rejected recommendation (ask zeroed by `human_review`) skips this node entirely — there's nothing to personalize for a $0 letter.
 
@@ -583,7 +583,7 @@ docker compose up -d jaeger prometheus grafana
 # Grafana:     http://localhost:3000  (anonymous admin access, local-only)
 ```
 
-**Tracing.** The tricky part of instrumenting this system isn't any one process — it's that a run crosses a real process boundary: the API enqueues via Celery, a worker picks it up, and only then does the pipeline execute. `opentelemetry-instrumentation-celery` closes that gap by injecting the active trace context into the task message's headers on publish and restoring it worker-side, so `POST /workflow/run` and the `run_workflow` task it enqueues render as *one* trace, not two disconnected ones. Every graph node gets its own child span (`agent.<node_name>`) via a single `traced_node()` wrapper applied uniformly in `graph/builder.py` — so a slow run is diagnosable down to which specific agent was slow, without having touched any individual agent module. Verified live: a d-0002 run through `completed` produced one 17-span trace, correctly split as `prf-api` (HTTP handling, the Celery publish) followed by `prf-celery-worker` (task execution, then one span per node in execution order). That run shows 11 of the graph's 12 nodes — d-0002 completes without pausing, and `human_review` is only ever reached by a conditional edge from one of the three interrupt stages, so its absence from the trace is itself the routing working correctly.
+**Tracing.** The tricky part of instrumenting this system isn't any one process — it's that a run crosses a real process boundary: the API enqueues via Celery, a worker picks it up, and only then does the pipeline execute. `opentelemetry-instrumentation-celery` closes that gap by injecting the active trace context into the task message's headers on publish and restoring it worker-side, so `POST /workflow/run` and the `run_workflow` task it enqueues render as *one* trace, not two disconnected ones. Every graph node gets its own child span (`agent.<node_name>`) via a single `traced_node()` wrapper applied uniformly in `graph/builder.py` — so a slow run is diagnosable down to which specific agent was slow, without having touched any individual agent module. Verified live: a d-0002 run through `completed` produced one 17-span trace, correctly split as `prf-api` (HTTP handling, the Celery publish) followed by `prf-celery-worker` (task execution, then one span per node in execution order). That run shows 11 of the graph's nodes (12 at the time; 14 now) — d-0002 completes without pausing, and `human_review` (with `reconcile_decision` after it) is only ever reached by a conditional edge from one of the three interrupt stages, as `revise_letter` is only reached when Compliance disapproves a letter, so their absence from a clean run's trace is itself the routing working correctly.
 
 **Metrics.** The API gets request count/latency free via `prometheus-fastapi-instrumentator` (`GET /metrics`). The Celery worker has no HTTP server of its own, so `workers/metrics.py` starts a dedicated one on `:9100` and records task duration/count via Celery's `task_prerun`/`task_postrun` signals, plus two pipeline-specific counters — `pipeline_runs_total{status=}` and `pipeline_human_review_pauses_total{stage=}` — recorded from `workers/tasks.py`, where terminal status is actually decided.
 
@@ -894,7 +894,7 @@ Calibration is measured but deliberately not over-claimed: at n=33 the reliabili
 
 **Why RAG is scored in two halves.** A wrong answer means either retrieval never surfaced the right chunk, or it did and generation mishandled it. The final output cannot distinguish those, so retrieval is measured independently against known-correct documents.
 
-**Why per-class recall, not just accuracy.** The labeled set is 9 eligible to 2 ineligible. A model that blindly answered "eligible" scores 82% accuracy while failing *both* cases that carry legal consequences. `recall_ineligible` is therefore promoted to a headline metric — it must be 1.000.
+**Why per-class recall, not just accuracy.** The labeled set is 9 eligible to 2 ineligible. A model that blindly answered "eligible" scores 82% accuracy while failing *both* cases that carry legal consequences. `recall_ineligible` is therefore promoted to a headline metric — it must be 1.000. It scores the model's verdict *before* `enforce_eligibility` corrects it (recorded in the audit trail only when a correction happened), because scoring the enforced verdict would make it 1.000 by construction — the metric exists to show whether the model follows the rule unaided, while the guard is what guarantees the outcome.
 
 **Why calibration is measured.** The pipeline *routes* on confidence thresholds, so whether a stated 0.9 means 90% correctness is load-bearing, not academic. The suite buckets predictions by stated confidence and compares each bucket's mean confidence to its observed accuracy, reporting expected calibration error. This is what turns threshold-setting from intuition into measurement.
 
