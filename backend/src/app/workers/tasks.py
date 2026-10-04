@@ -277,6 +277,12 @@ def _derive_terminal_status(result: dict, settings) -> tuple[str, float | None, 
     pers = result.get("personalization_result")
     rec = result.get("recommendation_result")
     addr = result.get("address_result")
+    if result.get("eligibility_revoked"):
+        # The donor became do-not-contact/suppressed while the run sat paused;
+        # human_review ended it. Same outcome shape as a donor found ineligible
+        # at verification (completed, nothing mailed), attributed to the review
+        # node that caught it, with no confidence of its own.
+        return "completed", None, "human_review"
     if pdf is not None:
         # generate_pdf itself is deterministic — no LLM assessment of the PDF,
         # so no confidence of its own. It still runs when the upstream

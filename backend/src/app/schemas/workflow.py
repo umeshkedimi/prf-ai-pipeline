@@ -21,6 +21,10 @@ class ReviewDecisionCreate(BaseModel):
     matter what the agent-side schema declares."""
 
     action: Literal["approve", "reject", "modify"]
+    # Required: binds the decision to the pause it was made for. Without it, a
+    # late second reviewer's decision gets consumed by whichever interrupt the
+    # graph reaches next. The endpoint rejects a mismatch with 409.
+    stage: Literal["address", "recommendation", "compliance"]
     updated_address: str | None = None  # address-stage review
     updated_ask_amount: float | None = None  # recommendation-stage review
     reviewer: str | None = None

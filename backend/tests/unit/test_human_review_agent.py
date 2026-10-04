@@ -2,7 +2,10 @@
 (address and recommendation) from a single node. Patches interrupt() so the
 decision can be injected directly without running a real graph."""
 
+import json
+
 import pytest
+from langgraph.graph import END
 
 from app.agents.human_review import agent as agent_module
 from app.graph import builder as builder_module
@@ -17,6 +20,29 @@ def _mock_audit_log(monkeypatch):
 
     monkeypatch.setattr(agent_module, "write_audit_log", fake_write_audit_log)
     return calls
+
+
+class _FakeCrmTool:
+    def __init__(self, profile: dict):
+        self.profile = profile
+        self.calls: list[dict] = []
+
+    async def ainvoke(self, args):
+        self.calls.append(args)
+        return json.dumps(self.profile)
+
+
+@pytest.fixture(autouse=True)
+def _mock_crm(monkeypatch):
+    """human_review re-reads the donor's eligibility flags after a decision.
+    Default: a clean donor. Tests that need a revoked donor mutate `.profile`."""
+    tool = _FakeCrmTool({"do_not_contact": False, "is_suppressed": False})
+
+    async def fake_get_crm_tools():
+        return {"get_donor_profile": tool}
+
+    monkeypatch.setattr(agent_module, "get_crm_tools", fake_get_crm_tools)
+    return tool
 
 
 def _patch_interrupt(monkeypatch, decision):
@@ -190,5 +216,97 @@ def test_review_request_schema_matches_the_agent_decision_schema():
 def test_review_request_carries_an_updated_ask_amount():
     from app.schemas.workflow import ReviewDecisionCreate
 
-    payload = ReviewDecisionCreate(action="modify", updated_ask_amount=500.0, reviewer="demo")
+    payload = ReviewDecisionCreate(
+        action="modify", stage="recommendation", updated_ask_amount=500.0, reviewer="demo"
+    )
     assert payload.model_dump()["updated_ask_amount"] == 500.0
+
+
+# --- eligibility re-check on resume -------------------------------------------
+
+
+def _rec_state(**extra):
+    return {
+        "workflow_run_id": "wf-1",
+        "donor_id": "donor-1",
+        "verification_result": {"eligible": True, "confidence": 0.9, "reason": "clean"},
+        "recommendation_result": {"recommended_ask": 1500.0, "confidence": 0.7},
+        **extra,
+    }
+
+
+async def test_clean_donor_passes_the_recheck_and_it_is_audited(monkeypatch, _mock_audit_log, _mock_crm):
+    _patch_interrupt(monkeypatch, {"action": "approve", "reviewer": "demo"})
+    result = await agent_module.human_review(_rec_state())
+
+    assert "eligibility_revoked" not in result
+    assert _mock_crm.calls == [{"donor_id": "donor-1"}]
+    audit = _mock_audit_log[0]
+    assert audit["output"]["eligibility_recheck"] == {"checked": True, "blocking_flags": []}
+    assert audit["tool_calls"][0]["tool_name"] == "get_donor_profile"
+
+
+@pytest.mark.parametrize("flag", ["do_not_contact", "is_suppressed"])
+async def test_donor_who_opted_out_during_the_pause_revokes_eligibility(
+    monkeypatch, _mock_audit_log, _mock_crm, flag
+):
+    _mock_crm.profile = {"do_not_contact": False, "is_suppressed": False, flag: True}
+    _patch_interrupt(monkeypatch, {"action": "approve", "reviewer": "demo"})
+
+    result = await agent_module.human_review(_rec_state())
+
+    assert result["eligibility_revoked"]["blocking_flags"] == [flag]
+    verdict = result["verification_result"]
+    assert verdict["eligible"] is False and verdict["revoked_during_review"] is True
+    assert flag in verdict["reason"]
+    # The reviewer's decision is still recorded; the run just can't continue.
+    assert result["human_review_decision"]["action"] == "approve"
+    assert _mock_audit_log[0]["output"]["eligibility_recheck"]["blocking_flags"] == [flag]
+
+
+async def test_reject_does_not_hit_the_crm_at_all(monkeypatch, _mock_audit_log, _mock_crm):
+    """A reject ends the run anyway, and a CRM outage must not block it."""
+    _patch_interrupt(monkeypatch, {"action": "reject", "reviewer": "demo"})
+    await agent_module.human_review(_rec_state())
+    assert _mock_crm.calls == []
+    assert _mock_audit_log[0]["output"]["eligibility_recheck"] == {"checked": False}
+
+
+def test_a_revoked_donor_ends_the_run_whatever_the_reviewer_decided():
+    state = {
+        "eligibility_revoked": {"blocking_flags": ["do_not_contact"]},
+        "recommendation_result": {"recommended_ask": 1500.0},
+    }
+    assert builder_module.route_after_human_review(state) == END
+
+
+def test_a_revoked_run_reads_as_completed_at_human_review():
+    from app.core.config import get_settings
+    from app.workers.tasks import _derive_terminal_status
+
+    result = {
+        "eligibility_revoked": {"blocking_flags": ["is_suppressed"]},
+        "address_result": {"confidence": 0.5, "deliverable": True},  # would otherwise read needs_review
+        "verification_result": {"eligible": False, "confidence": 0.9},
+    }
+    assert _derive_terminal_status(result, get_settings()) == ("completed", None, "human_review")
+
+
+def test_reconcile_is_skipped_for_a_revoked_donor():
+    from app.agents.human_review.reconcile import should_reconcile
+
+    state = {
+        "eligibility_revoked": {"blocking_flags": ["do_not_contact"]},
+        "recommendation_result": {"segment": "major"},
+        "human_review_decision": {"action": "approve", "notes": "be gentle"},
+    }
+    assert not should_reconcile(state)
+
+
+def test_the_review_request_requires_a_stage():
+    from pydantic import ValidationError
+
+    from app.schemas.workflow import ReviewDecisionCreate
+
+    with pytest.raises(ValidationError):
+        ReviewDecisionCreate.model_validate({"action": "approve"})

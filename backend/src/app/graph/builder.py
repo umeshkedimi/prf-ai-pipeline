@@ -56,7 +56,13 @@ def route_after_human_review(state: PipelineState) -> str:
     zeroed out by human_review, and there's nothing to personalize for a $0
     letter. An address-stage decision (recommendation not computed yet)
     continues into the recommendation if the address is now deliverable, else
-    stops (rejected/undeliverable → can't mail)."""
+    stops (rejected/undeliverable → can't mail).
+
+    Checked first: a donor who became do-not-contact or suppressed while the
+    run was paused (human_review re-reads those two flags on resume) ends the
+    run regardless of what the reviewer decided."""
+    if state.get("eligibility_revoked"):
+        return END
     if state.get("compliance_disclosures") is not None:
         disclosures = state.get("compliance_disclosures") or {}
         return "review_letter_compliance" if disclosures.get("registered_to_solicit") else END

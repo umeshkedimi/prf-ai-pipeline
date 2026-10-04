@@ -236,15 +236,43 @@ async def submit_review(
     user: User = Depends(get_current_user),
 ) -> WorkflowRun:
     """Submits a human decision for a workflow paused on a real LangGraph
-    interrupt() and re-enqueues it to resume from exactly where it stopped."""
-    run = await session.get(WorkflowRun, workflow_run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="workflow run not found")
-    if run.status != "awaiting_review":
+    interrupt() and re-enqueues it to resume from exactly where it stopped.
+
+    The run is claimed with one conditional UPDATE (`awaiting_review` ->
+    `running`) that also requires the decision's `stage` to match the stage the
+    run is paused at. Two reviewers acting on the same pause therefore cannot
+    both win: the loser matches no row and gets a 409. Without the claim both
+    would be enqueued, and the second resume would be consumed by whichever
+    interrupt the graph reached *next* — applying a decision to the wrong stage."""
+    claimed = await session.execute(
+        update(WorkflowRun)
+        .where(
+            WorkflowRun.id == workflow_run_id,
+            WorkflowRun.status == "awaiting_review",
+            WorkflowRun.pending_review["stage"].astext == payload.stage,
+        )
+        .values(status="running")
+        .returning(WorkflowRun.id)
+    )
+    if claimed.scalar_one_or_none() is None:
+        await session.rollback()
+        run = await session.get(WorkflowRun, workflow_run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        if run.status != "awaiting_review":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"workflow run is '{run.status}', not awaiting_review — nothing to resume "
+                    "(another reviewer may already have decided)"
+                ),
+            )
+        paused_at = (run.pending_review or {}).get("stage")
         raise HTTPException(
             status_code=409,
-            detail=f"workflow run is '{run.status}', not awaiting_review — nothing to resume",
+            detail=f"workflow run is paused at stage '{paused_at}', but the decision was for '{payload.stage}'",
         )
+    await session.commit()
 
     # reviewer is set from the authenticated session, not the request body --
     # the field still exists on ReviewDecisionCreate for API-shape parity with
@@ -252,7 +280,20 @@ async def submit_review(
     # value is overwritten here so the audit trail can't be spoofed.
     decision = payload.model_dump()
     decision["reviewer"] = user.email
-    resume_workflow_after_review.delay(str(run.id), decision)
+    try:
+        resume_workflow_after_review.delay(str(workflow_run_id), decision)
+    except Exception:
+        # Broker down: give the pause back rather than strand the run in `running`.
+        await session.execute(
+            update(WorkflowRun)
+            .where(WorkflowRun.id == workflow_run_id, WorkflowRun.status == "running")
+            .values(status="awaiting_review")
+        )
+        await session.commit()
+        raise HTTPException(status_code=503, detail="could not enqueue the decision; try again")
+
+    run = await session.get(WorkflowRun, workflow_run_id)
+    await session.refresh(run)
     return run
 
 

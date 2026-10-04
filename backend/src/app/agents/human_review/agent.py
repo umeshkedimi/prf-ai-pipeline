@@ -1,7 +1,9 @@
 from langgraph.types import interrupt
 
+from app.agents.donor_verification.eligibility import blocking_flags
 from app.core.audit import write_audit_log
 from app.graph.state import PipelineState
+from app.mcp_clients.crm_client import get_crm_tools, parse_single
 
 AGENT_NAME = "human_review"
 
@@ -46,6 +48,27 @@ async def human_review(state: PipelineState) -> dict:
     updated = dict(under_review)
     action = decision.get("action")
 
+    # A run can sit paused for hours or days, but donor_profile is a snapshot
+    # from before the pause — so a donor who opted out (or was suppressed) in the
+    # meantime would otherwise still be mailed. Re-read just the two hard
+    # eligibility flags now that a human has decided. Deliberately not a full
+    # refresh: the reviewer approved against the data they were shown, and
+    # silently swapping other fields underneath that decision would make it a
+    # decision about data they never saw. A reject needs no check — it ends the
+    # run either way, and a CRM outage shouldn't be able to block a reject.
+    recheck: dict = {"checked": False}
+    revoked = None
+    recheck_calls: list[dict] = []
+    if action != "reject":
+        tools = await get_crm_tools()
+        args = {"donor_id": state.get("donor_id")}
+        profile = parse_single(await tools["get_donor_profile"].ainvoke(args))
+        flags = blocking_flags(profile)
+        recheck = {"checked": True, "blocking_flags": flags}
+        recheck_calls = [{"tool_name": "get_donor_profile", "args": args, "result": recheck}]
+        if flags:
+            revoked = {"blocking_flags": flags, "stage": stage}
+
     if stage == "compliance":
         # No numeric/address field applies here, so "modify" behaves like
         # "approve" — the reviewer's notes carry the reason (e.g. registration
@@ -82,9 +105,23 @@ async def human_review(state: PipelineState) -> dict:
         agent_name=AGENT_NAME,
         step="human_review",
         input_snapshot={"stage": stage, "under_review": under_review},
-        output=updated,
+        output={**updated, "eligibility_recheck": recheck},
         reasoning=decision.get("notes"),
         source_refs=[{"reviewer": decision.get("reviewer"), "action": action, "stage": stage}],
+        tool_calls=recheck_calls,
     )
 
-    return {result_key: updated, "human_review_decision": decision}
+    update = {result_key: updated, "human_review_decision": decision}
+    if revoked:
+        verification = dict(state.get("verification_result") or {})
+        verification.update(
+            eligible=False,
+            reason=(
+                f"Became ineligible while the run was paused for review: CRM flag "
+                f"{', '.join(revoked['blocking_flags'])} is now set."
+            ),
+            revoked_during_review=True,
+        )
+        update["verification_result"] = verification
+        update["eligibility_revoked"] = revoked
+    return update

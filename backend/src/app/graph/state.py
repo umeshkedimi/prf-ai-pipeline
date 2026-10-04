@@ -38,3 +38,6 @@ class PipelineState(TypedDict, total=False):
     human_review_decision: dict[str, Any] | None
     # Writing guidance extracted from the reviewer's notes by reconcile_decision.
     reviewer_guidance: dict[str, Any] | None
+    # Set when the donor became do-not-contact/suppressed *while the run was paused*;
+    # ends the run right after the review node. See human_review.
+    eligibility_revoked: dict[str, Any] | None

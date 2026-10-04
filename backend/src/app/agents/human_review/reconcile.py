@@ -45,6 +45,8 @@ def should_reconcile(state: PipelineState) -> bool:
     compliance stage resumes past drafting, and empty notes carry no
     information — none of those spend an LLM call."""
     decision = state.get("human_review_decision") or {}
+    if state.get("eligibility_revoked"):
+        return False  # the run is about to end; there is no letter to guide
     if state.get("compliance_disclosures") is not None:
         return False
     if decision.get("action") == "reject":
