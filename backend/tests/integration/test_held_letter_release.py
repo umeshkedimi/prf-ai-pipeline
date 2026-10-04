@@ -161,3 +161,105 @@ async def test_release_task_failure_returns_the_run_to_needs_review(db_session, 
     assert held_run.status == "needs_review"
     assert "vendor unavailable" in held_run.error
     assert held_run.result["pdf_generation"]["held"] is True  # still held, no order
+
+
+# --- stuck-claim recovery ----------------------------------------------------
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from app.core.config import get_settings  # noqa: E402
+
+
+@pytest.fixture
+async def make_claimed_run(db_session):
+    """A run mid-release (`running`, claim stamped `age_seconds` ago)."""
+    created: list = []
+
+    async def _make(age_seconds: int):
+        claimed_at = (datetime.now(UTC) - timedelta(seconds=age_seconds)).isoformat()
+        run = WorkflowRun(
+            donor_id=seed_uuid("donor", "d-0001"),
+            status="running",
+            result={
+                "pdf_generation": {
+                    **HELD_PDF,
+                    "release_claim": {
+                        "claimed_at": claimed_at,
+                        "reviewer": "first@prf.local",
+                        "notes": "original release",
+                    },
+                }
+            },
+        )
+        db_session.add(run)
+        await db_session.commit()
+        created.append(run.id)
+        return run.id
+
+    yield _make
+    await db_session.rollback()
+    await db_session.execute(delete(AgentAuditLog).where(AgentAuditLog.workflow_run_id.in_(created)))
+    await db_session.execute(delete(WorkflowRun).where(WorkflowRun.id.in_(created)))
+    await db_session.commit()
+
+
+STALE = get_settings().release_claim_ttl_seconds + 60
+FRESH = 5
+
+
+async def test_a_fresh_running_claim_cannot_be_taken_over(db_session, make_claimed_run, enqueued):
+    rid = await make_claimed_run(FRESH)
+    with pytest.raises(HTTPException) as exc:
+        await endpoint.release_held(rid, _decision(), db_session, USER)
+    assert exc.value.status_code == 409
+    assert "already in progress" in exc.value.detail
+    assert enqueued == []
+
+
+async def test_a_stale_claim_is_retaken_once_and_re_enqueued(db_session, make_claimed_run, enqueued):
+    rid = await make_claimed_run(STALE)
+    await endpoint.release_held(rid, _decision(), db_session, USER)
+    assert len(enqueued) == 1 and enqueued[0][1]["reviewer"] == "reviewer@prf.local"
+
+    # The takeover refreshed the claim, so a second retry now loses (CAS).
+    with pytest.raises(HTTPException) as exc:
+        await endpoint.release_held(rid, _decision(), db_session, USER)
+    assert exc.value.status_code == 409
+    assert len(enqueued) == 1
+
+
+async def test_recovery_re_enqueues_stale_claims_with_their_stored_decision(
+    db_session, make_claimed_run, monkeypatch
+):
+    stale = await make_claimed_run(STALE)
+    fresh = await make_claimed_run(FRESH)
+    calls: list[tuple] = []
+    monkeypatch.setattr(tasks.release_held_letter, "delay", lambda *a: calls.append(a))
+
+    await tasks._recover_stale_releases()
+
+    ids = [c[0] for c in calls]
+    assert str(stale) in ids and str(fresh) not in ids
+    decision = next(c[1] for c in calls if c[0] == str(stale))
+    assert decision["reviewer"] == "first@prf.local" and decision["notes"] == "original release"
+
+    # Recovered claims are refreshed, so recovering again is a no-op.
+    calls.clear()
+    await tasks._recover_stale_releases()
+    assert str(stale) not in [c[0] for c in calls]
+
+
+async def test_release_task_is_a_no_op_when_the_run_already_finished(db_session, held_run, monkeypatch):
+    rid = held_run.id
+    ordered: list = []
+
+    async def fake_submit(reference, page_count):
+        ordered.append(reference)
+        return {}, []
+
+    monkeypatch.setattr(tasks, "submit_print_order", fake_submit)
+    held_run.status = "completed"  # a redelivered/duplicate task finds it done
+    await db_session.commit()
+
+    await tasks._release(str(rid), {"notes": "fine", "reviewer": "r@prf.local"})
+    assert ordered == []  # no second order

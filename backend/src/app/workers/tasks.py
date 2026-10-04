@@ -14,6 +14,11 @@ from app.db.models import WorkflowRun
 from app.db.session import db_session
 from app.graph.builder import build_graph
 from app.workers.celery_app import celery_app
+from app.workers.release_claims import (
+    build_claim,
+    find_stale_release_ids,
+    reclaim_stale_release,
+)
 from app.workers.metrics import pipeline_human_review_pauses_total, pipeline_runs_total
 
 log = get_logger(__name__)
@@ -37,6 +42,43 @@ def release_held_letter(workflow_run_id: str, decision: dict) -> None:
     asyncio.run(_release(workflow_run_id, decision))
 
 
+@celery_app.task(name="recover_stale_releases")
+def recover_stale_releases() -> int:
+    """Re-enqueues held-letter releases whose claim outlived the TTL — a worker
+    or the API died between claiming the run and placing the order. Sent when a
+    worker starts (see celery_app's worker_ready hook), which is exactly when a
+    crashed worker has just come back. Safe to run repeatedly and concurrently:
+    each takeover is a compare-and-swap on the claim timestamp, and the order
+    itself is keyed on the run's deterministic reference."""
+    return asyncio.run(_recover_stale_releases())
+
+
+async def _recover_stale_releases() -> int:
+    await reset_engine()
+    recovered = 0
+    try:
+        async with db_session() as session:
+            stale_ids = await find_stale_release_ids(session)
+        for run_id in stale_ids:
+            async with db_session() as session:
+                run = await session.get(WorkflowRun, run_id)
+                stored = ((run.result or {}).get("pdf_generation") or {}).get("release_claim") or {}
+                decision = {
+                    "action": "release",
+                    "reviewer": stored.get("reviewer", "recovery"),
+                    "notes": stored.get("notes", "recovered stale release"),
+                }
+                won = await reclaim_stale_release(session, run_id, build_claim(decision))
+                await session.commit()
+            if won:
+                release_held_letter.delay(str(run_id), decision)
+                recovered += 1
+                log.warning("workflow_run.release_recovered", workflow_run_id=str(run_id))
+    finally:
+        await reset_engine()
+    return recovered
+
+
 async def _release(workflow_run_id: str, decision: dict) -> None:
     """Places the print order for a letter a human released after Compliance
     disapproved it. The endpoint already claimed the run atomically (status ->
@@ -49,7 +91,17 @@ async def _release(workflow_run_id: str, decision: dict) -> None:
         try:
             async with db_session() as session:
                 run = await session.get(WorkflowRun, run_uuid)
-                pdf_result = dict((run.result or {})["pdf_generation"])
+                pdf_result = dict((run.result or {}).get("pdf_generation") or {})
+                # Idempotent under redelivery or a duplicate recovery: if the run
+                # is no longer a held, claimed release, someone already finished
+                # it (or it was reset) and there is nothing left to order.
+                if run.status != "running" or not pdf_result.get("held"):
+                    log.info(
+                        "workflow_run.release_skipped",
+                        workflow_run_id=workflow_run_id,
+                        status=run.status,
+                    )
+                    return
 
             order, tool_calls = await submit_print_order(
                 pdf_result["reference"], pdf_result["page_count"]

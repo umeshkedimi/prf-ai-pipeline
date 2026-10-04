@@ -10,6 +10,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import write_audit_log
+from app.core.config import get_settings
+from app.workers.release_claims import build_claim, claim_release, reclaim_stale_release
 from app.api.deps import get_db
 from app.api.deps_auth import get_current_user
 from app.db.models import AgentAuditLog, Campaign, Donor, User, WorkflowRun
@@ -269,31 +271,48 @@ async def release_held(
 
     The run is claimed with a single conditional UPDATE, so two concurrent
     requests cannot both win — the loser matches zero rows and gets a 409,
-    and no second order is placed."""
-    claimed_status = "running" if payload.action == "release" else "discarded"
-    claimed = await session.execute(
-        update(WorkflowRun)
-        .where(
-            WorkflowRun.id == workflow_run_id,
-            WorkflowRun.status == "needs_review",
-            WorkflowRun.result["pdf_generation"]["held"].astext == "true",
+    and no second order is placed. A release whose claim has gone stale
+    (worker or API died mid-release) is retried by calling this again: the
+    stale claim is taken over by compare-and-swap, and re-running is safe
+    because the order is keyed on the run's deterministic reference."""
+    # reviewer comes from the session, never the body (same rule as /review).
+    decision = {"action": payload.action, "notes": payload.notes, "reviewer": user.email}
+
+    if payload.action == "release":
+        claim = build_claim(decision)
+        claimed = await claim_release(session, workflow_run_id, claim) or (
+            await reclaim_stale_release(session, workflow_run_id, claim)
         )
-        .values(status=claimed_status)
-        .returning(WorkflowRun.id)
-    )
-    if claimed.scalar_one_or_none() is None:
+    else:
+        discarded = await session.execute(
+            update(WorkflowRun)
+            .where(
+                WorkflowRun.id == workflow_run_id,
+                WorkflowRun.status == "needs_review",
+                WorkflowRun.result["pdf_generation"]["held"].astext == "true",
+            )
+            .values(status="discarded")
+            .returning(WorkflowRun.id)
+        )
+        claimed = discarded.scalar_one_or_none() is not None
+    if not claimed:
         await session.rollback()
         run = await session.get(WorkflowRun, workflow_run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="workflow run not found")
+        if run.status == "running":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "a release is already in progress; it can be retried if it is still "
+                    f"running after {get_settings().release_claim_ttl_seconds}s"
+                ),
+            )
         raise HTTPException(
             status_code=409,
             detail=f"workflow run is '{run.status}' and has no held letter to decide on",
         )
     await session.commit()
-
-    # reviewer comes from the session, never the body (same rule as /review).
-    decision = {"action": payload.action, "notes": payload.notes, "reviewer": user.email}
 
     if payload.action == "release":
         try:

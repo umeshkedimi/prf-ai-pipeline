@@ -45,3 +45,31 @@ def test_released_result_fills_the_order_and_records_who_and_why():
     assert released["hold_reason"] == ["implies a guaranteed outcome"]
     # Input is not mutated.
     assert _HELD["held"] is True and _HELD["vendor_order_id"] is None
+
+
+# --- claim staleness ---------------------------------------------------------
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from app.core.config import get_settings  # noqa: E402
+from app.workers.release_claims import build_claim, is_stale  # noqa: E402
+
+
+def _claim_age(seconds: int) -> dict:
+    return {"claimed_at": (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()}
+
+
+def test_a_claim_is_stale_only_after_the_ttl():
+    ttl = get_settings().release_claim_ttl_seconds
+    assert not is_stale(_claim_age(ttl - 30))
+    assert is_stale(_claim_age(ttl + 30))
+
+
+def test_no_claim_is_never_stale():
+    assert not is_stale(None) and not is_stale({})
+
+
+def test_build_claim_records_who_when_and_why():
+    claim = build_claim({"reviewer": "r@prf.local", "notes": "fine"})
+    assert claim["reviewer"] == "r@prf.local" and claim["notes"] == "fine"
+    assert datetime.fromisoformat(claim["claimed_at"]).tzinfo is not None

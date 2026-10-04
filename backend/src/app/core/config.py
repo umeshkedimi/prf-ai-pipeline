@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # revise_letter -> review_letter_compliance). Deterministic by design: the
     # loop is bounded by this count, never by the model deciding it is done.
     max_letter_revisions: int = 2
+    # How long a held-letter release may sit in `running` before it counts as
+    # stalled (worker or API died mid-release) and can be taken over and retried.
+    # Must comfortably exceed a normal release, which is one vendor call.
+    release_claim_ttl_seconds: int = 300
     # A recommended ask at or above this dollar amount is a major-gift decision
     # that pauses for human approval, per the spec's human-review trigger list.
     major_gift_ask_threshold: float = 1000.0

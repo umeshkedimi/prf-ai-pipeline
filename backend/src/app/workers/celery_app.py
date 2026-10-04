@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.signals import worker_ready
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
 
 from app.core.config import get_settings
@@ -36,3 +37,11 @@ celery_app.conf.update(
     # introspection/retries, never read by the API.
     result_expires=3600,
 )
+
+
+@worker_ready.connect
+def _recover_stalled_work_on_startup(sender=None, **_kwargs) -> None:
+    """A worker that crashed mid-release leaves a run in `running` that nothing
+    will advance; the restarted worker is the natural moment to look. Enqueued
+    rather than run inline so a slow DB can't delay the worker becoming ready."""
+    celery_app.send_task("recover_stale_releases")
