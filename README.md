@@ -735,6 +735,14 @@ Two things that had to survive the extra hop, both confirmed against a live d-00
 - **Tool-calling.** `gather_context`'s loop depends on it. The config uses `ollama_chat/` rather than `ollama/` specifically because the former routes through Ollama's chat-completions API, which is the one with working tool-call support.
 - **Token accounting.** `agent_audit_log` still records real per-agent input/output tokens through the proxy — with `pdf_generation` correctly showing none, since it makes no LLM call at all.
 
+### Hosted model, for speed
+
+A 24-donor campaign takes about 16 minutes on the local 14B model (one worker slot, 40 to 60 seconds a donor). `litellm/config.yaml` also defines `gpt-4o-mini` — outside the `pipeline`/`judge` alias groups, like the other hosted models — backed by the same `OPENAI_API_KEY` the embeddings already need, and still under the proxy's $10 `max_budget`. Selecting it is one setting (`LLM_MODEL=gpt-4o-mini`); on the cluster that is `kubectl -n prf set env deploy/celery-worker deploy/celery-agent-worker LLM_MODEL=gpt-4o-mini`.
+
+Measured on the kind cluster with the same planted-defect campaign: the full run (agent + all 24 donor runs) finished in **633 seconds**, a donor run takes about 24 seconds instead of 40 to 60, and a tool-calling model response takes under 2 seconds. The agent requested the fix for exactly the four planted donors every time.
+
+The same run showed that **the model is a parameter of the result, not a detail**. With `gpt-4o-mini` as the compliance reviewer, 19 of 22 letters were disapproved even after the two revise attempts, so 22 donors ended `held` and none `ready` — the system behaved correctly (nothing was mailed, every donor was accounted for, the report said so), but a stricter judge produced a very different campaign. The committed eval baselines were measured on `qwen2.5:14b`; they do not transfer, and a sweep on this model would need its own baseline. The agent also used 150k tokens (its whole budget) cycling between waiting, grouping failures, and proposing holds.
+
 ## Demos
 
 Every command below requires a session token — log in once and export it (all `/workflow/*` routes require it since Phase 9a):
