@@ -39,6 +39,10 @@ class AgentRun(Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Stamped on every loop step; a `running` run whose heartbeat has gone quiet lost
+    # its worker (see workers/agent_recovery.py). `awaiting_approval` is a legitimate
+    # pause and is never considered stalled.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentStep(Base):

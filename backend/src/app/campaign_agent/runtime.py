@@ -126,6 +126,7 @@ async def run_agent(
     launcher: Launcher = enqueue_celery_runs,
     approver: Approver | None = None,
     model=None,
+    recovering: bool = False,
 ) -> None:
     """Production passes none of the keyword arguments: a pause returns, and a human
     resumes later through the API. The agent eval passes an in-memory checkpointer, a
@@ -146,12 +147,16 @@ async def run_agent(
         graph = build_agent_graph(model, gateway, hooks).compile(checkpointer=cp)
         config = {"configurable": {"thread_id": f"agent-{agent_run_id}"},
                   "recursion_limit": budget.max_steps * 3 + 10}
+        fresh = {"messages": [SystemMessage(SYSTEM_PROMPT), HumanMessage(goal_message(goal))]}
         if resume is not None:
             result = await graph.ainvoke(Command(resume=resume), config)
+        elif recovering:
+            # Continue from the last checkpoint; if the worker died before the first
+            # one was written there is nothing to continue, so start over.
+            has_checkpoint = bool((await graph.aget_state(config)).values)
+            result = await graph.ainvoke(None if has_checkpoint else fresh, config)
         else:
-            result = await graph.ainvoke(
-                {"messages": [SystemMessage(SYSTEM_PROMPT), HumanMessage(goal_message(goal))]}, config
-            )
+            result = await graph.ainvoke(fresh, config)
         while approver is not None and result.get("__interrupt__"):
             decision = await approver(result["__interrupt__"][0].value)
             result = await graph.ainvoke(Command(resume=decision), config)

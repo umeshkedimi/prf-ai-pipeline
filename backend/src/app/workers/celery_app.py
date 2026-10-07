@@ -36,6 +36,8 @@ celery_app.conf.update(
     task_routes={
         "run_campaign_agent": {"queue": "agent"},
         "resume_campaign_agent": {"queue": "agent"},
+        "continue_campaign_agent": {"queue": "agent"},
+        "recover_stalled_agent_runs": {"queue": "agent"},
     },
     # Real source of truth for workflow status is the workflow_runs table (see
     # tasks.py) — the result backend exists only for Celery-level task
@@ -60,6 +62,7 @@ def _recover_stalled_work_on_startup(sender=None, **_kwargs) -> None:
     for name, ttl in (
         ("recover_stale_releases", settings.release_claim_ttl_seconds),
         ("recover_stalled_runs", settings.run_stall_ttl_seconds),
+        ("recover_stalled_agent_runs", settings.run_stall_ttl_seconds),
     ):
         celery_app.send_task(name)
         celery_app.send_task(name, countdown=ttl + 15)

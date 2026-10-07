@@ -19,7 +19,10 @@ async def create_agent_run(
     campaign_id: uuid.UUID, goal: str, budget: Budget, user_id: uuid.UUID | None = None
 ) -> uuid.UUID:
     async with db_session() as session:
-        run = AgentRun(campaign_id=campaign_id, goal=goal, budget=budget.snapshot(), created_by_user_id=user_id)
+        run = AgentRun(
+            campaign_id=campaign_id, goal=goal, budget=budget.snapshot(), created_by_user_id=user_id,
+            heartbeat_at=func.now(),
+        )
         session.add(run)
         await session.commit()
         return run.id
@@ -45,7 +48,12 @@ def make_audit_sink(agent_run_id: uuid.UUID) -> AuditSink:
 
 async def save_budget(agent_run_id: uuid.UUID, budget: Budget) -> None:
     async with db_session() as session:
-        await session.execute(update(AgentRun).where(AgentRun.id == agent_run_id).values(budget=budget.snapshot()))
+        # Doubles as the liveness beat: it already runs after every model call and tool call.
+        await session.execute(
+            update(AgentRun)
+            .where(AgentRun.id == agent_run_id)
+            .values(budget=budget.snapshot(), heartbeat_at=func.now())
+        )
         await session.commit()
 
 
