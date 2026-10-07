@@ -1,6 +1,8 @@
 """Wires the loop to the real world: Postgres-backed hooks, the LLM, the checkpointer.
 Runs inside a Celery worker (see workers/agent_tasks.py); the API never calls this."""
 
+import asyncio
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -32,6 +34,8 @@ from app.harness.gateway import ToolGateway
 from app.mcp_clients.compliance_client import get_compliance_tools, parse_single
 
 log = get_logger(__name__)
+
+SETTLE_SECONDS = 300
 
 
 async def unregistered_states(campaign_id: uuid.UUID) -> set[str]:
@@ -72,6 +76,17 @@ class StoreHooks:
     async def request_approval(self, pending: dict) -> None:
         await store.request_approval(self.run_id, pending)
 
+    async def _settle(self, max_seconds: int) -> None:
+        deadline = time.monotonic() + max_seconds
+        while time.monotonic() < deadline:
+            async with db_session() as session:
+                await sync_statuses(session, self.campaign_id)
+                await session.commit()
+                counts = await status_counts(session, self.campaign_id)
+            if counts["queued"] + counts["running"] == 0:
+                return
+            await asyncio.sleep(5)
+
     async def completion_blockers(self) -> list[str]:
         """Facts that make 'done' premature: runs still in flight, or staged donors that
         were neither launched nor named in a proposal."""
@@ -92,6 +107,12 @@ class StoreHooks:
         return blockers
 
     async def finish(self, status: str, summary: str) -> None:
+        # Runs the agent launched may still be executing when it stops talking (the
+        # completion check can only send it back a bounded number of times). Settle them
+        # here, deterministically, so the report's counts are not a snapshot mid-flight.
+        # Skipped on budget exhaustion: that stop should be prompt.
+        if status == "completed":
+            await self._settle(SETTLE_SECONDS)
         async with db_session() as session:
             await sync_statuses(session, self.campaign_id)
             await session.commit()
