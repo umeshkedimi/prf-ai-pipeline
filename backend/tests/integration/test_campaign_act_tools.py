@@ -73,10 +73,10 @@ async def test_pad_zip_needs_approval_then_edits_exactly_the_requested_donors(ca
 async def test_launch_creates_runs_marks_queued_and_refuses_a_second_launch(campaign):
     cid, launched = campaign
     gw = _gw(cid)
-    r = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1", "not-a-donor"]})
+    r = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-2", "not-a-donor"]})
     assert r.observation["launched"] == 1 and len(launched) == 1
     assert r.observation["skipped"] == [{"external_id": "not-a-donor", "reason": "not_in_campaign"}]
-    again = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1"]})
+    again = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-2"]})
     assert again.observation["skipped"][0]["reason"] == "status_is_queued" and len(launched) == 1
 
 
@@ -100,6 +100,19 @@ async def test_launch_refuses_the_second_member_of_a_probable_duplicate_pair(cam
         held = (await s.execute(select(CampaignDonor).where(
             CampaignDonor.campaign_id == cid, CampaignDonor.status == "held"))).scalars().all()
     assert len(held) == 1 and held[0].status_reason.startswith("probable_duplicate_of_")
+
+
+async def test_launch_refuses_a_donor_whose_postal_code_is_still_malformed_until_it_is_fixed(campaign):
+    cid, launched = campaign
+    gw = _gw(cid)
+    # at-..-1 has "2134" (4 digits); at-..-2 has a valid 5-digit code
+    r = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1", f"at-{_TAG}-2"]})
+    assert r.observation["launched"] == 1 and len(launched) == 1
+    assert r.observation["skipped"][0]["reason"] == "malformed_postal_code"
+    # after the approved fix it launches
+    await gw.call("pad_postal_codes", {"external_ids": [f"at-{_TAG}-1"], "reason": "leading zero dropped"}, approved=True)
+    again = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1"]})
+    assert again.observation["launched"] == 1
 
 
 async def test_sync_marks_a_completed_run_ready_and_an_unregistered_one_blocked(campaign):

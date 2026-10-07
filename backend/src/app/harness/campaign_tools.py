@@ -19,12 +19,14 @@ from sqlalchemy import select
 
 from app.campaigns import queries
 from app.campaigns.membership import status_counts
+from app.campaigns.outcomes import postal_shape
 from app.campaigns.status import sync_statuses
 from app.db.models import CampaignDonor, Donor, WorkflowRun
 from app.db.session import db_session
 from app.harness.tools import Tier, ToolSpec
 
 MAX_LAUNCH_BATCH = 100
+_VALID_SHAPES = {"99999", "99999-9999"}
 _FOUR_DIGITS = re.compile(r"^\d{4}$")
 
 
@@ -136,6 +138,16 @@ def build_campaign_tools(
                     })
                 elif ext not in found:
                     skipped.append({"external_id": ext, "reason": "not_in_campaign"})
+                elif found[ext][0].postal_code and postal_shape(found[ext][0].postal_code) not in _VALID_SHAPES:
+                    # Another hard rule: a live run requested a fix for 2 of 4 malformed codes
+                    # and launched the other two as they were. Launching dirty data is what the
+                    # agent exists to prevent, so it cannot be skipped by omission.
+                    skipped.append({
+                        "external_id": ext,
+                        "reason": "malformed_postal_code",
+                        "postal_code": found[ext][0].postal_code,
+                        "hint": "fix it with pad_postal_codes (needs approval) or propose_action to hold it",
+                    })
                 elif found[ext][1].status != "staged":
                     skipped.append({"external_id": ext, "reason": f"status_is_{found[ext][1].status}"})
                 else:
