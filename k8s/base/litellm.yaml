@@ -44,6 +44,10 @@ spec:
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef: { name: prf-api-keys, key: ANTHROPIC_API_KEY }
+            # Backs the gpt-4o-mini entry in litellm/config.yaml.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: prf-api-keys, key: OPENAI_API_KEY }
           ports: [{ containerPort: 4000 }]
           volumeMounts:
             - name: config

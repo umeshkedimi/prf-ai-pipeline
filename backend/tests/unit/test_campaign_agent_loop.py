@@ -178,3 +178,17 @@ def test_completed_is_only_claimed_when_nothing_is_left():
     assert decide_final_status("completed", {"in_flight": 4, "staged_unaddressed": []}) == "completed_with_gaps"
     assert decide_final_status("completed", {"in_flight": 0, "staged_unaddressed": ["x"]}) == "completed_with_gaps"
     assert decide_final_status("budget_exhausted", {"in_flight": 9}) == "budget_exhausted"  # never upgraded
+
+
+async def test_a_run_budget_refusal_is_information_not_the_end_of_the_run():
+    async def launch(a):
+        return {"launched": a.x}
+
+    spec = ToolSpec("launch", "d", Tier.ACT, _A, launch, run_cost=lambda a: a.x)
+    gw = ToolGateway([spec], {"launch"}, Budget(max_runs=3))
+    hooks = _Hooks()
+    script = _Script(_call("launch", {"x": 10}), _call("launch", {"x": 2}, id="c2"), AIMessage(content="done"))
+    graph = build_agent_graph(script, gw, hooks).compile(checkpointer=MemorySaver())
+    await graph.ainvoke({"messages": [HumanMessage("go")]}, _cfg())
+    assert gw.budget.runs == 2  # the smaller request went through after the refusal
+    assert hooks.finished == ("completed", "done")

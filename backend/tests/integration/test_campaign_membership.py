@@ -42,3 +42,18 @@ async def test_attach_is_idempotent_and_preserves_status(db_session, campaign_wi
     assert row.status == "ready"
     counts = await status_counts(db_session, campaign.id)
     assert counts["ready"] == 1 and counts["staged"] == 0
+
+
+async def test_campaign_summary_refreshes_derived_status_without_an_agent(db_session, campaign_with_donor):
+
+    from app.api.v1.endpoints.campaigns import get_campaign
+    from app.db.models import WorkflowRun
+
+    campaign, donor = campaign_with_donor
+    await attach_donors_by_external_id(db_session, campaign.id, [_EXT])
+    db_session.add(WorkflowRun(donor_id=donor.id, campaign_id=campaign.id, status="completed", result={}))
+    await db_session.commit()
+    summary = await get_campaign(campaign.id, db_session)
+    assert summary.donor_counts["ready"] == 1 and summary.donor_counts["staged"] == 0
+    await db_session.execute(delete(WorkflowRun).where(WorkflowRun.campaign_id == campaign.id))
+    await db_session.commit()

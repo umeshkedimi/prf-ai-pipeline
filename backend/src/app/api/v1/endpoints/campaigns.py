@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.api.deps_auth import get_current_user, require_role
 from app.campaigns.membership import status_counts
+from app.campaigns.status import sync_statuses
 from app.db.models import Campaign
 from app.schemas.campaigns import CampaignCreate, CampaignRead, CampaignSummary
 
@@ -38,6 +39,11 @@ async def get_campaign(campaign_id: uuid.UUID, session: AsyncSession = Depends(g
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="campaign not found")
+    # campaign_donors.status is derived from run outcomes. Refresh it here so the counts are
+    # right whether or not an agent is running (a live run showed 14 donors "queued" for
+    # minutes after the pipeline had finished them, because only agent reads synced).
+    await sync_statuses(session, campaign_id)
+    await session.commit()
     counts = await status_counts(session, campaign_id)
     return CampaignSummary(
         **CampaignRead.model_validate(campaign).model_dump(),

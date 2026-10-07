@@ -87,7 +87,11 @@ def build_agent_graph(model: Any, gateway: ToolGateway, hooks: Hooks) -> StateGr
             return {"messages": out, "pending": pending}
         out.append(_tool_message(first["id"], first["name"], result.outcome.value, result.observation))
         update: dict = {"messages": out}
-        if result.outcome is Outcome.BUDGET_EXHAUSTED:
+        # Only the loop's own budgets end the run. A launch refused for the donor-run budget
+        # is information (ask for fewer), not an exhausted agent: a live run stopped at 216s
+        # with most of its steps unused because it asked for 10 with 7 left.
+        observation = result.observation if isinstance(result.observation, dict) else {}
+        if result.outcome is Outcome.BUDGET_EXHAUSTED and observation.get("limit") in {"max_steps", "max_tokens"}:
             update["stop_reason"] = "budget_exhausted"
         return update
 

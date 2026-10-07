@@ -55,6 +55,15 @@ model_list:
       model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # The cheapest hosted model that does tool calls and structured output, added
+  # because a local 14B model made a 24-donor campaign take ~16 minutes. The same
+  # OPENAI_API_KEY the embeddings already need; the $10 max_budget below still
+  # applies. Select it with LLM_MODEL=gpt-4o-mini (no alias change needed).
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
 router_settings:
   # A transient local-inference hiccup shouldn't cost a whole eval sweep. This
   # is a *transport*-level retry and is intentionally separate from the
