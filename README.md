@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml)
 
-A production-grade **agentic AI platform** for nonprofit fundraising campaigns. It takes donor records exported from a CRM and turns them into personalized, compliant, print-ready fundraising letters (PRFs) — automating donor validation, enrichment, personalization, and document generation through a LangGraph workflow of seven specialised stages with human-in-the-loop review — and, above it, one harnessed **campaign agent** that prepares a whole list of donors for mailing.
+An **agent harness for fundraising campaigns.** A campaign is a list of 10 to 2,000 donors, and the interesting failures are systemic — one bad import column breaking dozens of addresses, a duplicate pair, a state the org cannot solicit in. A single **campaign agent** prepares such a list for mailing: it profiles the data, fixes what is fixable (with a human's approval), launches donor runs in batches under a budget, reads the outcomes, and reports what is ready, what is held and why. It runs inside a **harness** — permission tiers, hard budgets, approval gates, an audited trajectory — and it drives a **deterministic donor workflow** that turns each donor record into a compliant, print-ready fundraising letter, pausing for a person whenever a rule says the decision is too consequential to automate.
 
-Built as a portfolio-quality reference architecture for Agentic AI / AI Platform Engineering roles: a bounded agent harness (permission tiers, budgets, approval gates), confidence-based routing, RAG, MCP tool integrations, checkpointing/resume, evaluation-driven development, and full explainability/auditability.
+Built as a portfolio-quality reference architecture for Agentic AI / AI Platform Engineering roles. The subject is *where an agent belongs and how to bound it*: one agent where the work is open-ended and checkable, a deterministic workflow with narrow LLM calls where it is not, and a measured account of what the model gets wrong (committed eval baselines, planted-defect campaigns, guards enforced in code).
 
-**In one sentence:** `POST /workflow/run {"donor_id": "d-0009"}` → seven stages verify the donor, repair a stale address, compute a defensible ask amount, draft a grounded letter, review it for legal risk, and hand a print-ready PDF to a mail vendor — pausing for a human whenever a deterministic rule says the decision is too consequential to automate.
+**In one sentence:** `POST /campaigns/{id}/agent/run` → an agent profiles a donor list, asks permission to fix a systemic data defect, launches the donor workflow in batches, notices what failed and why, and returns a report whose numbers come from the database — while every tool it touched was allowlisted, budgeted, tiered, and recorded.
 
 ---
 
@@ -16,9 +16,9 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
 - [Status](#status)
-- [The pipeline graph](#the-pipeline-graph)
-- [The agents](#the-agents)
 - [The campaign agent and its harness](#the-campaign-agent-and-its-harness)
+- [The donor workflow](#the-donor-workflow)
+- [The donor workflow stages](#the-donor-workflow-stages)
 - [Human review](#human-review)
 - [Status and confidence semantics](#status-and-confidence-semantics)
 - [Data model](#data-model)
@@ -62,7 +62,7 @@ Doing this by hand is slow and error-prone in ways that carry real consequence: 
 ```mermaid
 flowchart LR
   UI["React dashboard<br/>:5173"] -->|REST| API["FastAPI :8000"]
-  CLI["run_workflow_cli.py"] --> GRAPH["LangGraph StateGraph<br/>14 nodes / 7 agents"]
+  CLI["run_workflow_cli.py"] --> GRAPH["Donor workflow (LangGraph)<br/>12 nodes · 6 call an LLM"]
 
   API -->|"enqueue only —<br/>never calls an LLM"| Q[["Redis broker"]]
   Q --> W["Celery worker"]
@@ -88,17 +88,24 @@ flowchart LR
   PROM --> G["Grafana :3000"]
 ```
 
-Seven LangGraph agents, each producing a confidence-scored, explainable decision, with human review interrupts for low-confidence or high-stakes cases:
+Two layers, and the line between them is the point of the design:
 
-| # | Agent | Responsibility | LLM? |
-|---|---|---|---|
-| 1 | **Donor Verification** | Eligibility, duplicate detection, do-not-contact/suppression checks | Yes (+ tool loop) |
-| 2 | **Address Intelligence** | Validation, move detection, normalization | Yes |
-| 3 | **Donation Recommendation** | RFM scoring, ask-ladder generation | Yes (money math is not) |
-| 4 | **Campaign Personalization** | RAG-backed personalized letter copy | Yes |
-| 5 | **Compliance** | Disclaimers, tax language, state regulations | Yes (registration check is not) |
-| 6 | **PDF Generation** | Print-ready PDF, barcodes, QR codes, mailing metadata | **No** — purely mechanical |
-| 7 | **Human Review** | LangGraph `interrupt()`-based pause/approve/reject/modify/resume | No |
+| Layer | What it is | Who decides what happens next |
+|---|---|---|
+| **Campaign agent** + harness | One agent over a whole campaign: profile, dedupe, fix, launch in batches, read outcomes, report | A model, inside a harness (allowlist, tiers, budgets, approval gates) |
+| **Donor workflow** | 12 LangGraph nodes that turn one donor record into a mailable letter | Deterministic routing over recorded facts. A model is called in 6 nodes, only for judgment |
+
+The donor workflow's nodes, by whether a model is involved:
+
+| Stage | Nodes | LLM? |
+|---|---|---|
+| Verification | `fetch_core_data` · `gather_context` (tool loop) · `synthesize_verdict` | `gather_context`, `synthesize_verdict` — duplicate/suspicion judgment; eligibility itself is forced in code |
+| Address | `check_address` | **No** — MCP verification + a decision table |
+| Ask | `recommend_ask` | **No** — RFM, ladder, and a segment → rung policy |
+| Letter | `personalize_letter` · `revise_letter` | Yes — drafting inside a fixed tone |
+| Compliance | `gather_disclosures` · `review_letter_compliance` | `review_letter_compliance` only — registration and disclosure text are lookups |
+| Fulfilment | `generate_pdf` | **No** |
+| Human review | `human_review` · `reconcile_decision` | `reconcile_decision` only — reviewer notes → letter guidance; it cannot route |
 
 ### The three architectural boundaries
 
@@ -131,7 +138,7 @@ These are the load-bearing decisions. Everything else follows from them.
 │   │   ├── mcp_clients/        MultiServerMCPClient wrappers + response parsing
 │   │   ├── rag/                pgvector retrieval — embeddings, store, retriever
 │   │   ├── evals/              harness (types, runner, scorers, report, store)
-│   │   │                       + suites/ (9 suites)
+│   │   │                       + suites/ (8 suites)
 │   │   ├── workers/            Celery app + tasks + Prometheus metrics, plus
 │   │   │                       release_claims.py / run_recovery.py / agent_recovery.py
 │   │   │                       (stuck-work recovery) and agent_tasks.py (the agent queue)
@@ -159,7 +166,7 @@ These are the load-bearing decisions. Everything else follows from them.
 └── docker-compose.yml          13 services
 ```
 
-Every agent directory follows the same shape, so a reviewer who reads one can navigate all seven. Where an agent has deterministic logic, it lives in its own module (`rfm.py`, `rules.py`, `render.py`) rather than inside `agent.py` — that separation is the determinism boundary made visible in the file tree.
+Every stage directory follows the same shape, so a reviewer who reads one can navigate all of them. Where a stage has deterministic logic, it lives in its own module (`rfm.py`, `rules.py`, `render.py`) rather than inside `agent.py` — that separation is the determinism boundary made visible in the file tree.
 
 ## Status
 
@@ -178,100 +185,11 @@ Built **incrementally, phase by phase**, each phase fully working and demoable b
 | **9** ✅ | **9a** Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** CSV donor ingestion (`POST /donors/ingest`, admin-only, upserts by `external_id`) staged — never auto-runs — plus `GET /donors/unrun` and `POST /workflow/run/batch` to explicitly trigger runs on staged donors |
 | **Hardening** ✅ | Post-Phase-9 work on making the agents safer to operate: a bounded compliance critique → revise loop (`revise_letter`); `reconcile_decision` (reviewer notes → letter guidance); a letter Compliance still disapproves is **held** from the print vendor and a human can release or discard it (`POST /workflow/{id}/release`); do-not-contact/suppression **enforced in code** (`enforce_eligibility`) and re-checked when a paused run resumes; atomic claims and stage binding on `/review` for concurrent reviewers; recovery for runs and releases whose worker died (`heartbeat_at`, migration 0009) |
 | **10** ✅ | **The campaign agent.** `campaign_donors` membership + set-level tools (profile, duplicate pairs, failure clusters); `app/harness/` (tool gateway, four permission tiers, budgets, durable `agent_runs`/`agent_steps`, atomic approval claim); the LangGraph agent loop on its own Celery queue; stalled-agent recovery (migration 0012); dashboard trajectory + approval UI; a `campaign_agent` eval suite scored on planted-defect campaigns |
+| **11** ✅ | **Deterministic donor workflow.** Address assessment and ask selection were LLM calls whose prompts were decision tables; they are now rules (`address_intelligence/rules.py`, `donation_recommendation/rfm.py:choose_ask`) and each merged with its deterministic sibling node — 14 nodes → 12, 8 LLM-calling nodes → 6. The `recommendation` eval suite and the guard that existed only to repair its model (`enforce_deterministic_fields`) were retired with them |
 
-**Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
+**Evaluation framework** ✅ — built early, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
 
-All ten phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
-
-## The pipeline graph
-
-14 nodes across 7 agents (Donor Verification 3, Address Intelligence 2, Donation Recommendation 2, Campaign Personalization 2, Compliance 2, PDF Generation 1, Human Review 2). Every node is a real checkpoint boundary — the graph can crash and resume at any of them.
-
-```
-START → fetch_core_data → gather_context → synthesize_verdict
-           │
-           ├─ ineligible → END
-           │
-           └─ eligible → verify_address → assess_and_normalize
-                            │
-                            ├─ confidence < threshold → human_review [interrupt, stage=address]
-                            ├─ deliverable → compute_rfm
-                            └─ confident but undeliverable → END   (nothing to mail)
-                                            │
-        (address review resumes) ───────────┤
-                            ├─ now deliverable → compute_rfm
-                            └─ rejected → END
-                                            │
-                     compute_rfm → recommend_ask   [RAG over campaign knowledge]
-                                       │
-                                       ├─ ask ≥ major-gift threshold
-                                       │      → human_review [interrupt, stage=recommendation]
-                                       │            ├─ approved/modified, ask > 0 → personalize_letter
-                                       │            └─ rejected (ask zeroed) → END
-                                       └─ else → personalize_letter   [RAG over campaign knowledge]
-                                                       │
-                                     personalize_letter → gather_disclosures
-                                                       │
-                                                       ├─ not registered to solicit in-state
-                                                       │      → human_review [interrupt, stage=compliance]
-                                                       │            ├─ approve/modify → review_letter_compliance
-                                                       │            └─ reject → END
-                                                       └─ registered → review_letter_compliance
-                                                                          [RAG over compliance guidance]
-                                                                          │
-                                                                          ├─ disapproved, revisions < cap
-                                                                          │      → revise_letter → review_letter_compliance
-                                                                          └─ approved, or cap reached
-                                                                                 → generate_pdf → END
-                                                                                [Print Vendor MCP; the order is
-                                                                                 skipped (letter held) if still
-                                                                                 disapproved]
-```
-
-Every `human_review` exit passes through `reconcile_decision` before the resume routing shown above. It turns the reviewer's notes into letter-writing guidance (skipped for a reject, at the compliance stage, and for empty notes) and cannot change where the run goes — with one exception owned by `human_review` itself: a donor who became do-not-contact or suppressed *while the run was paused* ends the run whatever the reviewer decided.
-
-In `graph/builder.py` these are assembled as two named units onto one flat `StateGraph` — a **verification unit** (`fetch_core_data` → `gather_context` → `synthesize_verdict` → `verify_address` → `assess_and_normalize`) and a **fulfillment unit** (`compute_rfm` → `recommend_ask` → `personalize_letter` → `gather_disclosures` → `review_letter_compliance` → `generate_pdf`), wired through the shared `human_review` gate.
-
-This is deliberately a *code-organization* split, not LangGraph nested subgraphs. Nested subgraphs can only be entered at their own `START`, but `route_after_human_review` resumes **mid-unit** — into `compute_rfm`, `personalize_letter`, or `review_letter_compliance` depending on which stage paused. Nested subgraphs cannot express that, so using them would have meant contorting resume semantics to fit a diagram. A supervisor/dynamic-routing rewrite was also considered and rejected: it would spread runtime-decided routing across the whole pipeline shape, cutting directly against the determinism boundary.
-
-## The agents
-
-> **Read this first.** The seven below are *specialised stages of a workflow*, not autonomous agents. For one donor the order of work is fixed, the routing is a deterministic function of recorded facts, and a model is called only where judgment is needed (is this a duplicate? is this letter's wording risky?). Calling them agents oversold the design; the one place a model genuinely decides *what happens next* is the [campaign agent](#the-campaign-agent-and-its-harness), which operates a whole list of donors.
-
-**Donor Verification** (Phase 1) — 3 nodes:
-
-1. **`fetch_core_data`** — deterministic `get_donor_profile` MCP call. `do_not_contact`/suppression flags are read as-is, never inferred by the LLM.
-2. **`gather_context`** — an LLM bound to `get_donation_history` + `find_potential_duplicate_donors` (via `langchain-mcp-adapters`, a real streamable-HTTP MCP server), in a bounded tool-calling loop.
-3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). The prompt tells the model do-not-contact and suppressed donors are ineligible, but that is **not** left to the prompt: `enforce_eligibility` (`agents/donor_verification/eligibility.py`) forces `eligible` to `False` in code whenever the CRM flag is set, and records the model's pre-correction verdict in the audit trail when it had to. It is one-directional — it can only remove eligibility, never grant it — and leaves confidence untouched. (This was previously only prompted, while the routing docstring described it as enforced; the same instructed-not-enforced gap the ask-ladder guard closed.) "Eligible" is scoped strictly to compliance/legitimacy — the model is explicitly told *not* to factor in address deliverability, which is a separate downstream concern.
-
-**Address Intelligence** (Phase 2) — 2 nodes, only reached if the donor is eligible:
-
-1. **`verify_address`** — deterministic `verify_address` MCP call. Donors with no address on file skip the call entirely.
-2. **`assess_and_normalize`** — deterministically calls `lookup_new_address` when `verify_address` flagged `moved=true` (that lookup is a business rule, not a judgment call), then an LLM produces the final structured `AddressResult` (`deliverable`, `confidence`, `updated_address`, `moved`, `reasoning[]`).
-
-**Donation Recommendation** (Phase 3) — 2 nodes, only reached for a donor we can actually mail:
-
-1. **`compute_rfm`** — fully deterministic. Recency/Frequency/Monetary scoring and the 3-rung ask ladder (typical → step-up → aspirational) are computed by formula from giving history, with no LLM involved. Reuses the `donation_history` `gather_context` already fetched rather than re-hitting the CRM.
-2. **`recommend_ask`** — retrieves campaign knowledge from pgvector, then an LLM *chooses* a rung from that ladder and justifies it. It is explicitly forbidden from inventing or altering dollar figures — the money math is reproducible and auditable; only the judgment is model-driven.
-
-The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history (>5× the median), it's treated as a likely data-entry error or one-off windfall and the anchor falls back to the median, recorded as `outlier_gift_excluded`. Without this, d-0006's anomalous $50,000 donation — the very record Donor Verification flags as suspicious — would have produced a $125,000 ask.
-
-**RAG** (Phase 3) — semantic search over *unstructured campaign knowledge* only (impact stats, program outcomes, success stories, ask-strategy and stewardship guidelines) in `backend/knowledge/`, chunked by heading, embedded with OpenAI `text-embedding-3-small` and stored in a pgvector `knowledge_chunks` table with an HNSW cosine index. **Donor PII is never embedded** — structured donor data stays in the relational tables. Embeddings are provider-agnostic via LangChain `init_embeddings`, mirroring how `get_llm()` handles chat models. Re-ingest is idempotent (delete-and-reinsert per document).
-
-**Campaign Personalization** (Phase 4) — 2 nodes (`personalize_letter`, plus `revise_letter` for the bounded compliance rewrite loop), reached once an ask survives the recommendation stage:
-
-1. **`personalize_letter`** — a deterministic tone lookup keyed on the donor's RFM segment (gentle/reconnecting for lapsed, an invitation to step up for loyal, personal/relationship-based for major — the same segment vocabulary `recommend_ask` uses), then an LLM drafts the appeal letter within that fixed tone, grounded in retrieved stewardship and impact knowledge. The model never chooses the tone and never invents a cited figure; it only drafts. A rejected recommendation (ask zeroed by `human_review`) skips this node entirely — there's nothing to personalize for a $0 letter.
-
-**Compliance** (Phase 5) — 2 nodes, reached once a letter has been drafted:
-
-1. **`gather_disclosures`** — deterministic `get_disclosure_requirements` MCP call keyed on the donor's state. Whether the org is registered to solicit there at all is a legal fact, not a judgment call — if not, there is no letter-content review to make, so the graph pauses immediately rather than spending an LLM call on wording for a letter that can't legally mail regardless.
-2. **`review_letter_compliance`** — only reached when registered. Retrieves compliance guidance from pgvector and has an LLM judge the drafted letter for donor-rights/tax-language risk (`approved`, `confidence`, `flagged_issues[]`, `reasoning[]`). Required disclosures are merged in afterward from `gather_disclosures`' output, **never routed through the LLM** — legal boilerplate is not something a model should be asked to reproduce. `approved: false` routes the run to `needs_review` and, once the revise loop is exhausted, **holds the letter back from the print vendor** (see `generate_pdf`).
-
-   **Critique → revise loop.** Before falling through, a disapproved letter is sent to `revise_letter` (in `campaign_personalization`), which redrafts with the previous draft and the reviewer's `flagged_issues` in the prompt, then goes back to `review_letter_compliance` (not `gather_disclosures` — disclosures depend only on the donor's state). Capped at `MAX_LETTER_REVISIONS` (default 2) by a plain counter, `letter_revisions`, so the loop is bounded by code, never by the model deciding it is done. This routes off the model's `approved` boolean, which the determinism boundary normally avoids; it is acceptable here because the loop is advisory and bounded — a misjudgement costs one extra or one skipped draft — while the blocking compliance gate (state registration) still never reads model output. Each rewrite writes its own `revise_letter` audit row including the feedback it received. The trajectory eval strips rewrite cycles from the recorded path (`collapse_revisions`): whether a draft needed rewriting is model judgment, and scoring it would make `node_path_exact` grade drafting quality instead of routing.
-
-**PDF Generation** (Phase 6) — 1 node, the pipeline's terminus:
-
-1. **`generate_pdf`** — fully deterministic, **no LLM call at all**: every judgment the letter needed (copy, risk review) already happened upstream, so what's left is mechanical layout and a vendor order. Renders a print-ready single-page PDF (`reportlab`) styled as a real appeal letter — a letterhead (org name, tagline, contact line, accent-color rule), the dated recipient block, the drafted salutation/body/closing, a highlighted "your gift today" callout box built from the deterministic `recommended_ask` (never the letter's own prose — same non-LLM-boilerplate reasoning as the disclosures), a signature block, a P.S. line, the required disclosures, a QR code encoding a donation-tracking URL, and a Code128 barcode encoding a deterministic mail-piece reference (`sha256(workflow_run_id)[:8]` — stable across re-renders, distinct per run, so eval assertions can predict it). Body text wraps by actual glyph width (`pdfmetrics.stringWidth`), not a fixed character count, since the letter fonts are proportional. **The vendor order is the pipeline's one irreversible side effect, so it is gated on Compliance:** a letter still disapproved after the revise loop is rendered (a reviewer can read it via `GET /workflow/{id}/pdf`) but no order is submitted — `pdf_result` carries `held: true`, a `hold_reason` taken from the flagged issues, and null order fields. Only an explicit `approved: false` holds; a missing verdict does not. A human can then release or discard a held letter (see *Releasing a held letter* under Human review). Otherwise it submits the reference to the mocked Print Vendor MCP server and merges its order confirmation (`vendor_order_id`, `tracking_number`, `postage_class`, `turnaround_days`, `cost`) into `pdf_result`. The org identity in the letterhead (address, phone, signer name) is invented, synthetic detail, the same fictional-but-consistent convention as the rest of the seed data.
+All eleven phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
 
 ## The campaign agent and its harness
 
@@ -313,13 +231,105 @@ Admin: "Prepare this campaign for mailing"
 
 **How it is measured** (`campaign_agent` eval suite, see [Evaluation framework](#evaluation-framework)): four synthetic campaigns with a ground-truth manifest of planted defects — malformed ZIPs, duplicate pairs, unregistered states, an opted-out donor — plus a *clean* control that catches false alarms. The per-donor workflow and the human reviewer are simulated so the suite measures the agent's judgment, not the pipeline's speed. Scores use what the model *requested* (the audit args), with `_effective` twins for what survived the guards.
 
+## The donor workflow
+
+12 nodes, 6 of which call a model. Every node is a real checkpoint boundary — the graph can crash and resume at any of them. This is the engine the campaign agent drives (`launch_donor_runs` starts one run per donor); it is also runnable alone via `POST /workflow/run`.
+
+```
+START → fetch_core_data → gather_context → synthesize_verdict
+           │
+           ├─ ineligible → END
+           │
+           └─ eligible → check_address        [MCP + decision table, no LLM]
+                            │
+                            ├─ confidence < threshold → human_review [interrupt, stage=address]
+                            ├─ deliverable → recommend_ask
+                            └─ confident but undeliverable → END   (nothing to mail)
+                                            │
+        (address review resumes) ───────────┤
+                            ├─ now deliverable → recommend_ask
+                            └─ rejected → END
+                                            │
+                                     recommend_ask   [RFM + ladder + rung policy, no LLM]
+                                       │
+                                       ├─ ask ≥ major-gift threshold
+                                       │      → human_review [interrupt, stage=recommendation]
+                                       │            ├─ approved/modified, ask > 0 → personalize_letter
+                                       │            └─ rejected (ask zeroed) → END
+                                       └─ else → personalize_letter   [RAG over campaign knowledge]
+                                                       │
+                                     personalize_letter → gather_disclosures
+                                                       │
+                                                       ├─ not registered to solicit in-state
+                                                       │      → human_review [interrupt, stage=compliance]
+                                                       │            ├─ approve/modify → review_letter_compliance
+                                                       │            └─ reject → END
+                                                       └─ registered → review_letter_compliance
+                                                                          [RAG over compliance guidance]
+                                                                          │
+                                                                          ├─ disapproved, revisions < cap
+                                                                          │      → revise_letter → review_letter_compliance
+                                                                          └─ approved, or cap reached
+                                                                                 → generate_pdf → END
+                                                                                [Print Vendor MCP; the order is
+                                                                                 skipped (letter held) if still
+                                                                                 disapproved]
+```
+
+Every `human_review` exit passes through `reconcile_decision` before the resume routing shown above. It turns the reviewer's notes into letter-writing guidance (skipped for a reject, at the compliance stage, and for empty notes) and cannot change where the run goes — with one exception owned by `human_review` itself: a donor who became do-not-contact or suppressed *while the run was paused* ends the run whatever the reviewer decided.
+
+In `graph/builder.py` these are assembled as two named units onto one flat `StateGraph` — a **verification unit** (`fetch_core_data` → `gather_context` → `synthesize_verdict` → `check_address`) and a **fulfillment unit** (`recommend_ask` → `personalize_letter` → `gather_disclosures` → `review_letter_compliance` → `generate_pdf`), wired through the shared `human_review` gate.
+
+This is deliberately a *code-organization* split, not LangGraph nested subgraphs. Nested subgraphs can only be entered at their own `START`, but `route_after_human_review` resumes **mid-unit** — into `recommend_ask`, `personalize_letter`, or `review_letter_compliance` depending on which stage paused. Nested subgraphs cannot express that, so using them would have meant contorting resume semantics to fit a diagram. A supervisor/dynamic-routing rewrite was also considered and rejected: it would spread runtime-decided routing across the whole pipeline shape, cutting directly against the determinism boundary.
+
+## The donor workflow stages
+
+> **Read this first.** These are *stages of a workflow*, not autonomous agents. For one donor the order of work is fixed, the routing is a deterministic function of recorded facts, and a model is called only where judgment is needed (is this a duplicate? is this letter's wording risky?). Two stages used to call a model and no longer do — see below. The one place a model genuinely decides *what happens next* is the [campaign agent](#the-campaign-agent-and-its-harness), which operates a whole list of donors.
+
+**Donor Verification** (Phase 1) — 3 nodes:
+
+1. **`fetch_core_data`** — deterministic `get_donor_profile` MCP call. `do_not_contact`/suppression flags are read as-is, never inferred by the LLM.
+2. **`gather_context`** — an LLM bound to `get_donation_history` + `find_potential_duplicate_donors` (via `langchain-mcp-adapters`, a real streamable-HTTP MCP server), in a bounded tool-calling loop.
+3. **`synthesize_verdict`** — structured-output LLM call (`eligible`, `confidence`, `reason`, `is_duplicate`, `is_suspicious`, `reasoning[]`). The prompt tells the model do-not-contact and suppressed donors are ineligible, but that is **not** left to the prompt: `enforce_eligibility` (`agents/donor_verification/eligibility.py`) forces `eligible` to `False` in code whenever the CRM flag is set, and records the model's pre-correction verdict in the audit trail when it had to. It is one-directional — it can only remove eligibility, never grant it — and leaves confidence untouched. (This was previously only prompted, while the routing docstring described it as enforced; the same instructed-not-enforced gap the ask-ladder guard closed.) "Eligible" is scoped strictly to compliance/legitimacy — the model is explicitly told *not* to factor in address deliverability, which is a separate downstream concern.
+
+**Address Intelligence** (Phase 2) — 1 node, only reached if the donor is eligible:
+
+1. **`check_address`** — deterministic end to end. Verifies the address through the Address MCP tool, calls `lookup_new_address` only when the donor moved, then applies the decision table in `agents/address_intelligence/rules.py`. Donors with no address on file skip the tools entirely.
+
+   This was two nodes, the second an LLM call whose prompt was, line for line, this table (invalid or vacant → low confidence; moved with a forwarding address → weigh the forwarding confidence; clean → high). Nothing in it needed judgment, and handing it to a model let the confidence drift: a vacant address with no forwarding lookup was once scored a flat 1.0, and the model's `moved` flag was not stable across models. As code it is the same table, unit-tested, identical on every run. Confidence means *certainty about the deliverability verdict*, which is what `route_after_address` gates on: a certain "deliverable" flows on, a certain "undeliverable" (vacant) ends the run, and an uncertain verdict — a donor who moved with an unsure forwarding match, or no address on file — pauses for a person.
+
+**Donation Recommendation** (Phase 3) — 1 node, only reached for a donor we can actually mail:
+
+1. **`recommend_ask`** — deterministic end to end. Recency/Frequency/Monetary scoring and the 3-rung ask ladder (typical → step-up → aspirational) are formulas over giving history; the rung is chosen by a segment policy (`rfm.choose_ask`: lapsed and prospect donors are asked gently at the typical rung, everyone else at the step-up rung, never the aspirational one); the confidence is the strength of the giving evidence (thin history lowers it; an excluded outlier caps it). Reuses the `donation_history` `gather_context` already fetched.
+
+   This was two nodes, the second an LLM + RAG call that picked a rung and justified it. Measured against the audit log, the model dropped `recency_days` on 15 of 15 runs and flipped d-0006's outlier flag on 3 of 15, so a guard was written to restore the computed fields and snap the ask back onto the ladder. The better fix was to stop asking: the choice follows a fixed rule, the output is *money*, and the major-gift gate routes on it. The judgment a model adds lives in the letter and the compliance review, where it belongs.
+
+The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history (>5× the median), it's treated as a likely data-entry error or one-off windfall and the anchor falls back to the median, recorded as `outlier_gift_excluded`. Without this, d-0006's anomalous $50,000 donation — the very record Donor Verification flags as suspicious — would have produced a $125,000 ask.
+
+**RAG** (Phase 3) — semantic search over *unstructured campaign knowledge* only (impact stats, program outcomes, success stories, ask-strategy and stewardship guidelines) in `backend/knowledge/`, chunked by heading, embedded with OpenAI `text-embedding-3-small` and stored in a pgvector `knowledge_chunks` table with an HNSW cosine index. **Donor PII is never embedded** — structured donor data stays in the relational tables. Embeddings are provider-agnostic via LangChain `init_embeddings`, mirroring how `get_llm()` handles chat models. Re-ingest is idempotent (delete-and-reinsert per document).
+
+**Campaign Personalization** (Phase 4) — 2 nodes (`personalize_letter`, plus `revise_letter` for the bounded compliance rewrite loop), reached once an ask survives the recommendation stage:
+
+1. **`personalize_letter`** — a deterministic tone lookup keyed on the donor's RFM segment (gentle/reconnecting for lapsed, an invitation to step up for loyal, personal/relationship-based for major — the same segment vocabulary `recommend_ask` uses), then an LLM drafts the appeal letter within that fixed tone, grounded in retrieved stewardship and impact knowledge. The model never chooses the tone and never invents a cited figure; it only drafts. A rejected recommendation (ask zeroed by `human_review`) skips this node entirely — there's nothing to personalize for a $0 letter.
+
+**Compliance** (Phase 5) — 2 nodes, reached once a letter has been drafted:
+
+1. **`gather_disclosures`** — deterministic `get_disclosure_requirements` MCP call keyed on the donor's state. Whether the org is registered to solicit there at all is a legal fact, not a judgment call — if not, there is no letter-content review to make, so the graph pauses immediately rather than spending an LLM call on wording for a letter that can't legally mail regardless.
+2. **`review_letter_compliance`** — only reached when registered. Retrieves compliance guidance from pgvector and has an LLM judge the drafted letter for donor-rights/tax-language risk (`approved`, `confidence`, `flagged_issues[]`, `reasoning[]`). Required disclosures are merged in afterward from `gather_disclosures`' output, **never routed through the LLM** — legal boilerplate is not something a model should be asked to reproduce. `approved: false` routes the run to `needs_review` and, once the revise loop is exhausted, **holds the letter back from the print vendor** (see `generate_pdf`).
+
+   **Critique → revise loop.** Before falling through, a disapproved letter is sent to `revise_letter` (in `campaign_personalization`), which redrafts with the previous draft and the reviewer's `flagged_issues` in the prompt, then goes back to `review_letter_compliance` (not `gather_disclosures` — disclosures depend only on the donor's state). Capped at `MAX_LETTER_REVISIONS` (default 2) by a plain counter, `letter_revisions`, so the loop is bounded by code, never by the model deciding it is done. This routes off the model's `approved` boolean, which the determinism boundary normally avoids; it is acceptable here because the loop is advisory and bounded — a misjudgement costs one extra or one skipped draft — while the blocking compliance gate (state registration) still never reads model output. Each rewrite writes its own `revise_letter` audit row including the feedback it received. The trajectory eval strips rewrite cycles from the recorded path (`collapse_revisions`): whether a draft needed rewriting is model judgment, and scoring it would make `node_path_exact` grade drafting quality instead of routing.
+
+**PDF Generation** (Phase 6) — 1 node, the pipeline's terminus:
+
+1. **`generate_pdf`** — fully deterministic, **no LLM call at all**: every judgment the letter needed (copy, risk review) already happened upstream, so what's left is mechanical layout and a vendor order. Renders a print-ready single-page PDF (`reportlab`) styled as a real appeal letter — a letterhead (org name, tagline, contact line, accent-color rule), the dated recipient block, the drafted salutation/body/closing, a highlighted "your gift today" callout box built from the deterministic `recommended_ask` (never the letter's own prose — same non-LLM-boilerplate reasoning as the disclosures), a signature block, a P.S. line, the required disclosures, a QR code encoding a donation-tracking URL, and a Code128 barcode encoding a deterministic mail-piece reference (`sha256(workflow_run_id)[:8]` — stable across re-renders, distinct per run, so eval assertions can predict it). Body text wraps by actual glyph width (`pdfmetrics.stringWidth`), not a fixed character count, since the letter fonts are proportional. **The vendor order is the pipeline's one irreversible side effect, so it is gated on Compliance:** a letter still disapproved after the revise loop is rendered (a reviewer can read it via `GET /workflow/{id}/pdf`) but no order is submitted — `pdf_result` carries `held: true`, a `hold_reason` taken from the flagged issues, and null order fields. Only an explicit `approved: false` holds; a missing verdict does not. A human can then release or discard a held letter (see *Releasing a held letter* under Human review). Otherwise it submits the reference to the mocked Print Vendor MCP server and merges its order confirmation (`vendor_order_id`, `tracking_number`, `postage_class`, `turnaround_days`, `cost`) into `pdf_result`. The org identity in the letterhead (address, phone, signer name) is invented, synthetic detail, the same fictional-but-consistent convention as the rest of the seed data.
+
 ## Human review
 
 The platform's genuine pause: a real LangGraph `interrupt()`, not a status flag. One node serves **three review stages**, discriminated by checking most-downstream-first (each later stage's result key only exists once the one before it is resolved, so ordering makes this reliable):
 
 | Stage | Trigger | Deterministic? | On resume |
 |---|---|---|---|
-| **address** | Address confidence below threshold (0.80) | No — model confidence | Continues to recommendation if now deliverable; stops if rejected |
+| **address** | Address confidence below threshold (0.80) | **Yes** — a decision table over MCP facts (`check_address`); no model | Continues to recommendation if now deliverable; stops if rejected |
 | **recommendation** | Ask ≥ `MAJOR_GIFT_ASK_THRESHOLD` ($1,000) | **Yes** — a dollar amount | Continues to personalization if the (possibly human-adjusted) ask is still positive; stops if rejected |
 | **compliance** | Org not registered to solicit in donor's state | **Yes** — a legal flag | Continues into letter-content review then PDF if approve/modify; ends the run if rejected |
 
@@ -393,7 +403,7 @@ Status and confidence are driven by the **terminal stage** a run reached, plus a
 
 `generate_pdf` has no LLM call of its own, so a clean run terminating there reports **`confidence: null`** — not a failure to report a number, just nothing left to score once every upstream judgment has already run. A run blocked on state registration before any letter-content review ran also reports `null`, for the same reason earlier in the pipeline.
 
-**Confidence is never inflated.** A human approving a low-confidence result does not raise the recorded confidence — the number stays as the model reported it, with `human_reviewed: true` alongside.
+**Confidence is never inflated.** A human approving a low-confidence result does not raise the recorded confidence — the number stays as the stage reported it, with `human_reviewed: true` alongside.
 
 `workflow_runs.result` aggregates every agent that ran:
 
@@ -427,7 +437,7 @@ Keys are omitted for agents that never ran, so a reviewer sees the whole picture
 | `donor_imports` | One row per CSV upload — uploader, filename, insert/update/reject counts, full rejected-row detail (Phase 9b) |
 | `checkpoints` (LangGraph) | Durable graph state, dedicated schema — what makes crash/resume real |
 
-**Every node writes to `agent_audit_log`** — this is what `GET /workflow/{id}?verbose=true` exposes. `recommend_ask`, `personalize_letter`, and `review_letter_compliance` additionally record which knowledge chunks were retrieved and their cosine distances, so a reviewer can see exactly what each was grounded in.
+**Every node writes to `agent_audit_log`** — this is what `GET /workflow/{id}?verbose=true` exposes. `personalize_letter` and `review_letter_compliance` additionally record which knowledge chunks were retrieved and their cosine distances, so a reviewer can see exactly what each was grounded in.
 
 `review_history` is **derived** from `agent_audit_log` (rows where `agent_name = "human_review"`) rather than stored in its own column. A run can pause up to three times, and the audit log already accumulates one row per decision — a second table would have been a redundant source of truth that could drift.
 
@@ -779,7 +789,7 @@ curl "localhost:8000/api/v1/workflow/<workflow_run_id>" -H "Authorization: Beare
 # -> status: awaiting_review, pending_review: { stage: "recommendation",
 #      reason: "recommendation_requires_approval",
 #      under_review: { segment: "major", ask_ladder: [2000, 3000, 5000],
-#                      recommended_ask: 3000, confidence: 0.9, ... } }
+#                      recommended_ask: 3000, confidence: 0.8, ... } }
 #    d-0011's address is clean, so it never paused on address — this is
 #    purely the ask amount clearing the major-gift threshold.
 
@@ -792,7 +802,7 @@ curl -X POST localhost:8000/api/v1/workflow/<workflow_run_id>/review \
 curl "localhost:8000/api/v1/workflow/<workflow_run_id>?verbose=true" -H "Authorization: Bearer $TOKEN"
 # -> status: completed, current_agent: campaign_personalization,
 #    result.donation_recommendation: { recommended_ask: 500.0, human_reviewed: true,
-#      confidence: 0.9 (preserved honestly, not inflated) },
+#      confidence: 0.8 (preserved honestly, not inflated) },
 #    result.campaign_personalization: { tone: "personal, relationship-based,
 #      high-touch", confidence: 0.9, salutation, body,
 #      sources: ["Ask Strategy Guidelines", "Donor-Funded Success Stories"], ... }
@@ -905,11 +915,11 @@ uv run python scripts/run_workflow_cli.py review --workflow-run-id <id> --action
 | d-0007 | malformed — no address on file | `awaiting_review` (address) → rejected → `completed`, no ask, nothing to print |
 | d-0008 | clean recurring small donor | `completed`, ask $40, PDF generated |
 | d-0009 | moved, forwarding address found but uncertain | `awaiting_review` (address) → modified → `completed`, ask $75, PDF generated |
-| d-0010 | vacant/undeliverable, no forwarding found | `completed` directly, **no pause** — a confidently vacant address (confidence `1.0`, nothing found) is unambiguous, not uncertain, so `route_after_address` ends the run; no ask, nothing to print |
+| d-0010 | vacant/undeliverable, no forwarding found | `completed` directly, **no pause** — a vacant address with nothing found is a *certain* undeliverable (`CONF_CERTAIN_UNDELIVERABLE`), not an uncertain one, so `route_after_address` ends the run; no ask, nothing to print |
 | d-0011 | long-tenured major donor, clean address | `awaiting_review` (**recommendation**) → capped → `completed`, ask $500, "personal, relationship-based" tone, PDF generated |
 | **d-0012** | clean donor, clean address, modest ask — but state solicitation registration pending | `awaiting_review` (**compliance**) → approved → `completed`, letter-content review runs and a PDF is generated |
 
-The three interrupt stages are exercised by different donors on purpose: d-0007/d-0009 pause on the address and never reach a major-gift decision; d-0011 sails through address checks and pauses purely on the ask amount; d-0012 sails through both and pauses purely on state registration. d-0010 is the instructive near-miss — also undeliverable, but *confidently* so, which is a different thing from uncertain and correctly routes without a human.
+The three interrupt stages are exercised by different donors on purpose: d-0007/d-0009 pause on the address and never reach a major-gift decision; d-0011 sails through address checks and pauses purely on the ask amount; d-0012 sails through both and pauses purely on state registration. d-0010 is the instructive near-miss — also undeliverable, but *certainly* so, which is a different thing from uncertain and correctly routes without a human. That used to depend on a model happening to report high confidence; it is now a rule.
 
 Every donor clearing all three gates continues through `personalize_letter`, `review_letter_compliance`, and `generate_pdf`. Recommendation (0.50), personalization (0.60), and compliance's letter-risk review (0.75) are advisory-gated rather than blocking, so a run can finish even when one of those confidences was low (a letter Compliance *disapproves* still finishes, but its print order is held) — each later stage runs regardless of the one before it.
 
@@ -917,7 +927,7 @@ Every donor clearing all three gates continues through `personalize_letter`, `re
 
 ```bash
 cd backend
-uv run pytest                 # 262 unit tests, mocked LLM + MCP + retriever (~2.3s)
+uv run pytest                 # 267 unit tests, mocked LLM + MCP + retriever (~2.3s)
 uv run pytest -m integration  # real stack: live LLM + embeddings, MCP servers, Postgres (~4min)
 ```
 
@@ -931,7 +941,7 @@ Unit tests mock the LLM, the MCP tools, and the RAG retriever, so they run offli
 
 ## Evaluation framework
 
-Tests answer *"does the code do what I wrote?"* — deterministic, binary, permanent. They cannot answer *"does the system make good decisions?"* The unit test for the recommendation agent mocks the LLM entirely; it proves retrieved text reaches the prompt and nothing about whether the recommendation is sensible.
+Tests answer *"does the code do what I wrote?"* — deterministic, binary, permanent. They cannot answer *"does the system make good decisions?"* The unit test for `personalize_letter` mocks the LLM entirely; it proves retrieved text reaches the prompt and nothing about whether the letter is sensible.
 
 Evals close that gap. They are **not pass/fail gates** — they produce scores tracked against a committed baseline, so "did that prompt change help?" is a diff rather than a memory exercise.
 
@@ -952,7 +962,6 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `judge_control` | **whether the LLM judge itself still works** — synthetic cases with known verdicts | 5 |
 | `retrieval` | recall@1/@3/@5 and MRR over query→document pairs, scored *apart from generation* | 10 |
 | `verification` | eligibility classification + per-class recall + confidence calibration | 11 |
-| `recommendation` | ask-selection rule compliance + RAG groundedness | 5 |
 | `campaign_personalization` | letter-draft rule compliance (tone/segment fidelity, ask reference) + groundedness | 5 |
 | `compliance` | disclosure-lookup correctness (deterministic) + letter-content risk review | 4 |
 | `pdf_generation` | deterministic PDF assembly + vendor order correctness — no LLM call, so no judge scorer | 3 |
@@ -968,11 +977,10 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `judge_control` | `judge_verdict_correct` **1.000** | 6s |
 | `retrieval` | `recall@1` 0.900 · `recall@3` **1.000** · `recall@5` **1.000** · `mrr` 0.950 | 10s |
 | `verification` | `accuracy` **1.000** · `recall_ineligible` **1.000** · `expected_calibration_error` 0.104 | 507s |
-| `recommendation` | `ask_in_ladder` **1.000** · `sources_valid` **1.000** · `outlier_respected` **1.000** · `groundedness` **1.000** · `fields_unchanged` 0.000 | 172s |
-| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `references_recommended_ask` **1.000** · `groundedness` **1.000** · `sources_valid` 0.733 | 194s |
+| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `references_recommended_ask` **1.000** · `groundedness` **1.000** · `sources_valid` 0.533 | 249s |
 | `compliance` | all four scorers **1.000** | 36s |
 | `pdf_generation` | all five deterministic scorers **1.000** | 1s |
-| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 1098s |
+| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 383s |
 | `campaign_agent` | `approval_invariant` **1.000** · `duplicates_handled_effective` **1.000** · `no_false_alarms` **1.000** · `zip_fix_f1` 0.833 · `duplicates_handled` 0.708 · `no_invented_ids` 0.833 · `completed_within_budget` 0.917 | 808s |
 
 Provenance is **per suite**: each entry in `baseline.json` carries its own `git_sha` and `measured_at`, because the file is merged suite by suite and a single top-level SHA would credit untouched suites to a commit that never measured them. (The entries that predate this were backfilled from the recorded history: seven at `c8ba63c`, `trajectory` at `5e32501`. `trajectory` has still not been re-swept since the determinism guard — two attempts were refused over an execution error, and forcing it would have recorded a fabricated number.)
@@ -982,9 +990,8 @@ Every row above was recorded from a sweep with zero execution errors — that is
 - **`retrieval` `recall@1` 0.900** — one case (`adoption-story`) fails *deliberately*: an aggregate-stats chunk outranks the narrative story, which is a defensible tie. Tuning it to pass would strip the suite of discriminating power.
 - **`trajectory` is now clean at 1.000**, having sat at 0.917 for several sweeps. The failing case (d-0010) scored 0.000 *identically* across every run — and that consistency is what identified it. Flaky failures move between runs; a deterministic one means the suite and the system genuinely disagree. Here the system was right: `route_after_address` is documented to end a confident-but-undeliverable address without pausing, and d-0010 returns a flat confidence of 1.0, so there was no uncertainty for a human to adjudicate. The *expectation* was stale, left over from a pipeline model that scored the same donor differently. Corrected in `5e32501` — and the case now covers the third branch of that router, which nothing else exercised.
 - **`trajectory` has resisted two re-sweeps since, and the runner was right to refuse both.** Each attempt produced exactly one execution error out of 36 case-runs — a different donor every time (d-0008, then d-0007, then d-0011), which is the signature of transient local-inference flakiness rather than a broken fixture. Two shapes, both documented below: an empty tool result hitting `json.loads('')` inside `gather_context`'s loop, and `address_intelligence` emitting `confidence: 3` against a schema bounded at 1.0. Both already sit behind bounded retries (3 attempts); these exhausted them. The scores those runs reported — 0.972 on all three metrics — are arithmetically just 35/36, so the *routing* was correct in every run that completed. Promoting that 0.972 would have recorded a model-loading hiccup as a routing regression, which is exactly the error `--set-baseline`'s refusal exists to prevent. A metric is only worth keeping if a bad number means the system is wrong.
-- **`recommendation` `fields_unchanged` fell from 1.000 to 0.000 — and that is the measurement getting honest, not a regression.** Nothing about the system got worse; the scorer started checking the whole thing. It previously compared five of the eight fields the RFM computation owns. Widened to all eight (sourced from `DETERMINISTIC_FIELDS`, so scorer and guard cannot drift apart), it reports 0.000 on all five cases across all three runs — `[0.0, 0.0, 0.0]` every time, with no case flagged flaky. A deterministic zero is a finding, not noise: the model drops `recency_days` on *every* donor on *every* run, and always had. The three unchecked fields included `outlier_gift_excluded` — d-0006's outlier protection — which audit-log inspection showed the model flipping in 20% of runs. A clean 1.000 was being reported the entire time. This is the sharpest thing the eval framework has caught, and it argues the general point better than any passing score does: measurement is only as good as its coverage, and a metric that cannot fail teaches you nothing.
-- **`recommendation` `outlier_respected` 1.000 and `sources_valid` 1.000**, up from 0.800 and 0.733. `outlier_respected` is the guard working — `enforce_deterministic_fields` restores the flag the model flipped. `sources_valid` is not a real improvement: it is the same flakiness that produced 0.733, landing the other way. The previous baseline's own note said the 0.733 was sweep variance rather than a level, and this sweep is the confirmation. `campaign_personalization`'s `sources_valid` 0.733 is explicitly flagged flaky by the runner (d-0006, d-0008, d-0011, all with mixed run scores).
-- **`fields_unchanged` is now saturated, which is a live weakness worth naming.** Pinned at 0.000 by `recency_days` — a cosmetic field — the metric has no room left to move, so if `outlier_gift_excluded` degraded to failing every run the score would not budge. That is the same objection this README makes about tuning `adoption-story` to pass: a metric that cannot discriminate has stopped being a measurement. Splitting money-critical fields from cosmetic ones would fix it. Deliberately not done yet, because it changes what is being measured and needs its own sweep to re-baseline.
+- **The `recommendation` suite was retired, and that is the strongest thing its history says.** It was built to measure whether a model honoured "copy these fields through unchanged and pick a ladder rung". Widening its scorer from five fields to all eight dropped `fields_unchanged` from 1.000 to 0.000 on every case, every run — the model had been dropping `recency_days` the whole time and flipping d-0006's outlier flag in a fifth of runs — and a guard was added to repair it. Then the harder question: why is a model producing these at all? The answer was that the ask follows a fixed rule and is money, so the LLM call was removed rather than guarded. A suite that scores compliance of a step that no longer has a model would read 1.000 by construction; the rule is covered by unit tests (`test_ask_policy.py`) and the routing by `trajectory`.
+- **Re-baselining after the redesign.** Removing two LLM nodes changes what `trajectory` and `campaign_personalization` run through, so both were re-swept on a clean tree and carry their own `git_sha`. The campaign-personalization suite now feeds its letters the real `recommend_ask` instead of a stand-in, because the node is deterministic and free.
 - **`campaign_agent`: the harness holds, the model is the weak link — and the numbers show which is which.** The invariants are flat 1.000 (`approval_invariant`: an irreversible tool only ever ran right after an approving human decision; `duplicates_handled_effective`: the duplicate guard held). The model's own judgment is not: `duplicates_handled` 0.708 is the gap between what it *asked* to launch and what the guard allowed; `zip_fix_f1` 0.833 is flaky (`[0.0, 1.0, 1.0]` on identical runs — sometimes it simply doesn't fix the planted defect); `no_invented_ids` 0.833 is the model still making up ids on some runs, which the precheck then refuses. The first sweep, before the fixes the live runs forced, scored `zip_fix_f1` 0.25 and a false alarm on the clean control — those two moved because of harness changes (ids in the profile, a conditional prompt step, a precheck), not a model change. Kept as is rather than tuned: it is the honest picture of a 14B local model operating under a harness.
 
 Calibration is measured but deliberately not over-claimed: at n=33 the reliability table is enough to demonstrate the mechanism and catch gross miscalibration, not enough to set production thresholds from. It currently shows the model *under*-confident — stated 0.736 against observed 1.000 in the 0.7–0.8 bucket — which is the safe direction for a pipeline that routes on these numbers.
@@ -1009,7 +1016,7 @@ Sweeps are usually run mid-iteration, so a bare `HEAD` would silently credit the
 
 Decisions worth defending, with the counter-argument stated rather than hidden:
 
-**One agent, not seven.** The original design split a single donor's pipeline into seven "agents", which could not be defended: the order is fixed, routing is deterministic, and a model is called only for judgment. The agent was moved to where the problem is genuinely open-ended — a whole campaign — and the per-donor stages were relabelled as workflow stages rather than gutted, because removing their LLM calls would have invalidated the committed eval baselines for little demonstrable gain. The counter-argument: "stages with an LLM in them" is a weaker story than a clean deterministic workflow with two narrow LLM calls, and a stricter redesign would do that.
+**One agent, not seven.** The original design split a single donor's pipeline into seven "agents", which could not be defended: the order is fixed, routing is deterministic, and a model is called only for judgment. The agent was moved to where the problem is genuinely open-ended — a whole campaign — and the per-donor work became a workflow. Two stages whose prompts were decision tables (address assessment, ask selection) stopped calling a model; the six that remain (`gather_context`, `synthesize_verdict`, `personalize_letter`, `revise_letter`, `review_letter_compliance`, `reconcile_decision`) call one because the judgment is real. The counter-argument: `gather_context` still lets a model choose between two tools when both are always wanted — kept because it is the one genuine tool-calling loop in the workflow, not because it is cheaper.
 
 **The agent proposes; code or a human executes.** It has one irreversible tool (editing donor records) and it cannot run without approval. The cost is friction: a human is in the loop for a fix an engineer would call obvious. The alternative — letting a 14B model edit data on its own judgment — is exactly what the eval scores say not to do.
 
@@ -1025,7 +1032,7 @@ Decisions worth defending, with the counter-argument stated rather than hidden:
 
 **No prompt caching.** Considered and rejected: the minimum cacheable prefix on the relevant hosted models is 2048 tokens and these system prompts are under that, so it would silently never cache.
 
-**The eval framework is top-heavy on purpose.** Eight suites is a lot for seven agents. It was built at three agents rather than seven precisely because evals written after the fact get written to pass, encoding existing behavior as correct.
+**The eval framework is top-heavy on purpose.** Eight suites is a lot for a system whose donor workflow is mostly rules. It was built at three agents precisely because evals written after the fact get written to pass, encoding existing behavior as correct — and it earned that: it is what showed the model dropping fields, what made two LLM calls removable instead of merely guarded, and what scores the campaign agent. The cost is upkeep, visible in the sweep time; when a step stopped being a model's job, its suite went with it rather than being kept as theatre.
 
 ## Known limitations
 
