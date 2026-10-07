@@ -74,7 +74,8 @@
         }
       ],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "judge_control": {
       "suite": "judge_control",
@@ -105,7 +106,8 @@
       "flaky_case_ids": [],
       "failures": [],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "verification": {
       "suite": "verification",
@@ -197,7 +199,8 @@
       "flaky_case_ids": [],
       "failures": [],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "recommendation": {
       "suite": "recommendation",
@@ -324,7 +327,8 @@
         }
       ],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "trajectory": {
       "suite": "trajectory",
@@ -367,7 +371,8 @@
       "flaky_case_ids": [],
       "failures": [],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "5e32501"
     },
     "campaign_personalization": {
       "suite": "campaign_personalization",
@@ -466,7 +471,8 @@
         }
       ],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "compliance": {
       "suite": "compliance",
@@ -515,7 +521,8 @@
       "flaky_case_ids": [],
       "failures": [],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     },
     "pdf_generation": {
       "suite": "pdf_generation",
@@ -570,7 +577,8 @@
       "flaky_case_ids": [],
       "failures": [],
       "errors": [],
-      "scorer_errors": []
+      "scorer_errors": [],
+      "git_sha": "c8ba63c"
     }
   },
   "generated_at": "2026-07-27T12:01:39.485476+00:00",

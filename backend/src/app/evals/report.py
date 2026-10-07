@@ -42,9 +42,15 @@ def promote_to_baseline(reports: list[SuiteReport]) -> Path:
     can't silently erase the baseline for suites it skipped."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     baseline = load_baseline() or {"suites": {}}
-    baseline["suites"].update({r.suite: r.to_dict() for r in reports})
-    baseline["generated_at"] = datetime.now(UTC).isoformat()
-    baseline["git_sha"] = current_git_sha()
+    sha, now = current_git_sha(), datetime.now(UTC).isoformat()
+    # Provenance is per suite. The top-level git_sha only says when the file was last
+    # written; after a partial re-sweep it would otherwise credit every untouched suite
+    # to a commit that never measured it.
+    baseline["suites"].update(
+        {r.suite: {**r.to_dict(), "git_sha": sha, "measured_at": now} for r in reports}
+    )
+    baseline["generated_at"] = now
+    baseline["git_sha"] = sha
     baseline.update(current_models())
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     return BASELINE_PATH
