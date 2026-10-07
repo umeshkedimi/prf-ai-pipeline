@@ -27,7 +27,8 @@ FIELDS = ["external_id", "first_name", "last_name", "email", "address_line1", "c
 
 
 def generate_campaign_rows(
-    n: int = 100, seed: int = 7, bad_zip: int = 8, dup_pairs: int = 2, unregistered: int = 5, dnc: int = 1
+    n: int = 100, seed: int = 7, bad_zip: int = 8, dup_pairs: int = 2, unregistered: int = 5, dnc: int = 1,
+    prefix: str = "sc",
 ) -> tuple[list[dict], dict]:
     """Returns (rows, manifest). Planted-defect donors are disjoint, so each defect
     has exactly one expected finding."""
@@ -43,7 +44,7 @@ def generate_campaign_rows(
         first, last = combos[i]
         city, state, prefix = PLACES[i % len(PLACES)]
         rows.append({
-            "external_id": f"sc-{i + 1:04d}", "first_name": first, "last_name": last,
+            "external_id": f"{prefix}-{i + 1:04d}", "first_name": first, "last_name": last,
             "email": f"{first}.{last}@example.org".lower(),
             "address_line1": f"{100 + i * 7} {STREETS[i % len(STREETS)]}",
             "city": city, "state": state, "postal_code": f"{prefix}{rng.randint(10, 99)}",
@@ -73,7 +74,7 @@ def generate_campaign_rows(
     pairs = []
     for i in dup_src:
         src = rows[i]
-        dup = dict(src, external_id=f"sc-{len(rows) + 1:04d}",
+        dup = dict(src, external_id=f"{prefix}-{len(rows) + 1:04d}",
                    address_line1=src["address_line1"].replace("Court", "Ct").replace("Street", "St")
                    .replace("Avenue", "Ave").replace("Lane", "Ln").replace("Drive", "Dr"),
                    email="")

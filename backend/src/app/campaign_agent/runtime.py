@@ -2,6 +2,8 @@
 Runs inside a Celery worker (see workers/agent_tasks.py); the API never calls this."""
 
 import uuid
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
@@ -20,7 +22,12 @@ from app.db.session import db_session
 from app.graph.checkpointer import get_checkpointer
 from app.harness import store
 from app.harness.budget import Budget
-from app.harness.campaign_tools import CAMPAIGN_AGENT_ALLOWLIST, build_campaign_tools
+from app.harness.campaign_tools import (
+    CAMPAIGN_AGENT_ALLOWLIST,
+    Launcher,
+    build_campaign_tools,
+    enqueue_celery_runs,
+)
 from app.harness.gateway import ToolGateway
 from app.mcp_clients.compliance_client import get_compliance_tools, parse_single
 
@@ -99,26 +106,52 @@ class StoreHooks:
         await store.finish_run(self.run_id, status, report)
 
 
-async def run_agent(agent_run_id: uuid.UUID, resume: dict | None) -> None:
+@asynccontextmanager
+async def _checkpointer_ctx(given):
+    if given is not None:
+        yield given
+    else:
+        async with get_checkpointer() as cp:
+            yield cp
+
+
+Approver = Callable[[dict], Awaitable[dict]]
+
+
+async def run_agent(
+    agent_run_id: uuid.UUID,
+    resume: dict | None,
+    *,
+    checkpointer=None,
+    launcher: Launcher = enqueue_celery_runs,
+    approver: Approver | None = None,
+    model=None,
+) -> None:
+    """Production passes none of the keyword arguments: a pause returns, and a human
+    resumes later through the API. The agent eval passes an in-memory checkpointer, a
+    simulated launcher and a scripted `approver` so one call drives the whole run."""
     async with db_session() as session:
         run = await session.get(AgentRun, agent_run_id)
         campaign_id, goal, budget = run.campaign_id, run.goal, Budget.from_snapshot(run.budget)
 
-    tools = build_campaign_tools(campaign_id, await unregistered_states(campaign_id))
+    tools = build_campaign_tools(campaign_id, await unregistered_states(campaign_id), launcher)
     gateway = ToolGateway(
         tools, set(CAMPAIGN_AGENT_ALLOWLIST), budget, store.make_audit_sink(agent_run_id),
         start_seq=await store.max_seq(agent_run_id),
     )
-    model = get_llm().bind_tools(openai_tool_schemas(gateway))
+    model = model or get_llm().bind_tools(openai_tool_schemas(gateway))
     hooks = StoreHooks(agent_run_id, campaign_id, gateway)
 
-    async with get_checkpointer() as checkpointer:
-        graph = build_agent_graph(model, gateway, hooks).compile(checkpointer=checkpointer)
+    async with _checkpointer_ctx(checkpointer) as cp:
+        graph = build_agent_graph(model, gateway, hooks).compile(checkpointer=cp)
         config = {"configurable": {"thread_id": f"agent-{agent_run_id}"},
                   "recursion_limit": budget.max_steps * 3 + 10}
         if resume is not None:
-            await graph.ainvoke(Command(resume=resume), config)
+            result = await graph.ainvoke(Command(resume=resume), config)
         else:
-            await graph.ainvoke(
+            result = await graph.ainvoke(
                 {"messages": [SystemMessage(SYSTEM_PROMPT), HumanMessage(goal_message(goal))]}, config
             )
+        while approver is not None and result.get("__interrupt__"):
+            decision = await approver(result["__interrupt__"][0].value)
+            result = await graph.ainvoke(Command(resume=decision), config)

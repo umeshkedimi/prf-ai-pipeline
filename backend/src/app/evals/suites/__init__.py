@@ -4,6 +4,7 @@ and registering it — the runner, scorers, reporting, and persistence are share
 from dataclasses import replace
 
 from app.evals.suites import (
+    campaign_agent,
     campaign_personalization,
     compliance,
     judge_control,
@@ -28,6 +29,7 @@ ALL_SUITES: dict[str, EvalSuite] = {
         compliance.SUITE,
         pdf_generation.SUITE,
         trajectory.SUITE,
+        campaign_agent.SUITE,
     )
 }
 

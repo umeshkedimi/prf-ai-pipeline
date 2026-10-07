@@ -11,6 +11,7 @@ import asyncio
 import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,7 +62,22 @@ class _WaitArgs(BaseModel):
     max_seconds: int = Field(default=60, ge=5, le=120)
 
 
-def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) -> list[ToolSpec]:
+Launcher = Callable[[list[uuid.UUID]], Awaitable[None]]
+
+
+async def enqueue_celery_runs(run_ids: list[uuid.UUID]) -> None:
+    from app.workers.tasks import run_workflow  # lazy: tasks imports the whole graph
+
+    for rid in run_ids:
+        run_workflow.delay(str(rid))
+
+
+def build_campaign_tools(
+    campaign_id: uuid.UUID, unregistered_states: set[str], launcher: Launcher = enqueue_celery_runs
+) -> list[ToolSpec]:
+    """`launcher` starts the per-donor workflow for the given run ids. Production
+    enqueues Celery; the agent eval swaps in a simulator so it measures the agent's
+    judgment without paying for the pipeline."""
     async def refreshed():
         """Brings campaign_donors.status up to date before a read (idempotent)."""
         async with db_session() as s:
@@ -88,8 +104,6 @@ def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) 
             return await queries.list_donors_by_status(s, campaign_id, a.status, a.limit, a.offset)
 
     async def launch(a: _LaunchArgs):
-        from app.workers.tasks import run_workflow  # lazy: tasks imports the whole graph
-
         wanted = list(dict.fromkeys(a.external_ids))
         launched: list[str] = []
         skipped: list[dict] = []
@@ -117,8 +131,7 @@ def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) 
                     run_ids.append(run.id)
                     launched.append(ext)
             await s.commit()
-        for rid in run_ids:
-            run_workflow.delay(str(rid))
+        await launcher(run_ids)
         return {"launched": len(launched), "skipped": skipped, "launched_external_ids": launched}
 
     async def wait(a: _WaitArgs):
