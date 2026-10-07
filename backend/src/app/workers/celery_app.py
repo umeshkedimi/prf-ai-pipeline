@@ -32,6 +32,11 @@ celery_app.conf.update(
     result_serializer="json",
     accept_content=["json"],
     task_track_started=True,
+    # Agent control-plane tasks get their own queue (and worker) -- see docker-compose.yml.
+    task_routes={
+        "run_campaign_agent": {"queue": "agent"},
+        "resume_campaign_agent": {"queue": "agent"},
+    },
     # Real source of truth for workflow status is the workflow_runs table (see
     # tasks.py) — the result backend exists only for Celery-level task
     # introspection/retries, never read by the API.

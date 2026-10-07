@@ -21,6 +21,7 @@ NAME_SIM_MIN = 0.4
 ADDR_SIM_MIN = 0.4
 COMBINED_SIM_MIN = 1.3
 MAX_PAIRS = 200
+MAX_LISTED_IDS = 100
 
 
 async def profile_campaign(
@@ -47,6 +48,13 @@ async def profile_campaign(
             "state": sum(1 for d in donors if not d.state),
         },
         "postal_shapes": dict(Counter(postal_shape(d.postal_code) for d in donors).most_common()),
+        # Ids, not just counts: an agent told "3 donors have bad ZIPs" will otherwise guess
+        # which (it invented "donor-1234" in a live run).
+        "malformed_postal_codes": [
+            {"external_id": d.external_id, "postal_code": d.postal_code}
+            for d in donors
+            if postal_shape(d.postal_code) not in {"99999", "99999-9999"}
+        ][:MAX_LISTED_IDS],
         "states": dict(states.most_common()),
         "do_not_contact": sum(1 for d in donors if d.do_not_contact),
         "in_unregistered_states": sum(1 for d in donors if (d.state or "").upper() in unregistered),

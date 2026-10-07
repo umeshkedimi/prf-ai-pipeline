@@ -189,6 +189,15 @@ services:
       litellm:
         condition: service_healthy
 
+  # The campaign agent's control plane runs on its own queue and worker. On a shared
+  # single-slot worker the agent task would hold the only slot while waiting for the
+  # donor runs it launched -- which then could never start (found live, 10d).
+  celery-agent-worker:
+    extends:
+      service: celery-worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "agent", "-n", "agent@%h"]
+    ports: !reset []
+
   api:
     build: ./backend
     environment:

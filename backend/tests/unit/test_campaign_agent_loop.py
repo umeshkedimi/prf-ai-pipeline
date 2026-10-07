@@ -32,6 +32,7 @@ class _Script:
 class _Hooks:
     def __init__(self):
         self.approvals, self.finished, self.saves = [], None, 0
+        self.blockers = []  # list of lists, consumed one per check; empty = nothing blocks
 
     async def save_budget(self):
         self.saves += 1
@@ -41,6 +42,9 @@ class _Hooks:
 
     async def finish(self, status, summary):
         self.finished = (status, summary)
+
+    async def completion_blockers(self):
+        return self.blockers.pop(0) if self.blockers else []
 
 
 def _call(name, args=None, id="c1", content=""):
@@ -138,3 +142,22 @@ def test_summarize_steps_reports_facts_from_the_trail():
     assert [a.get("launched") or a.get("changed") for a in s["actions"]] == [9, 8]
     assert s["human_decisions"][0]["approved"] is True and s["steps"] == 5
 
+
+
+async def test_premature_finish_is_sent_back_to_work_then_accepted_when_clear():
+    script = _Script(AIMessage(content="I will launch the rest next"), _call("read"), AIMessage(content="done"))
+    graph, gw, hooks, ran = _setup([])
+    hooks.blockers = [["3 donors still staged"], [], []]
+    graph = build_agent_graph(script, gw, hooks).compile(checkpointer=MemorySaver())
+    await graph.ainvoke({"messages": [HumanMessage("go")]}, _cfg())
+    assert ran == [("read", 0)] and hooks.finished == ("completed", "done")
+    assert any("3 donors still staged" in str(m.content) for m in script.seen[1])
+
+
+async def test_the_agent_cannot_be_nudged_forever():
+    script = _Script(*[AIMessage(content=f"done {i}") for i in range(5)])
+    graph, gw, hooks, _ = _setup([])
+    hooks.blockers = [["x"]] * 20
+    graph = build_agent_graph(script, gw, hooks).compile(checkpointer=MemorySaver())
+    await graph.ainvoke({"messages": [HumanMessage("go")]}, _cfg())
+    assert hooks.finished[0] == "completed" and len(script.seen) == 3  # initial + MAX_NUDGES

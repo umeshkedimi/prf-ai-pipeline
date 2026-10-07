@@ -11,6 +11,7 @@ from app.campaign_agent.loop import build_agent_graph
 from app.campaign_agent.prompts import SYSTEM_PROMPT, goal_message
 from app.campaign_agent.report import summarize_steps
 from app.campaigns.membership import status_counts
+from app.campaigns.queries import list_donors_by_status
 from app.campaigns.status import sync_statuses
 from app.core.llm import get_llm
 from app.core.logging import get_logger
@@ -63,6 +64,25 @@ class StoreHooks:
 
     async def request_approval(self, pending: dict) -> None:
         await store.request_approval(self.run_id, pending)
+
+    async def completion_blockers(self) -> list[str]:
+        """Facts that make 'done' premature: runs still in flight, or staged donors that
+        were neither launched nor named in a proposal."""
+        async with db_session() as session:
+            await sync_statuses(session, self.campaign_id)
+            await session.commit()
+            counts = await status_counts(session, self.campaign_id)
+            staged = await list_donors_by_status(session, self.campaign_id, "staged", limit=500)
+        proposed = {i for p in summarize_steps(await store.load_steps(self.run_id))["proposals"]
+                    for i in p["donor_external_ids"]}
+        unaddressed = [d["external_id"] for d in staged if d["external_id"] not in proposed]
+        blockers = []
+        if counts["queued"] + counts["running"]:
+            blockers.append(f"{counts['queued'] + counts['running']} donor runs are still in flight (call wait_for_runs)")
+        if unaddressed:
+            blockers.append(f"{len(unaddressed)} staged donors are neither launched nor proposed for a hold "
+                            f"(e.g. {', '.join(unaddressed[:5])})")
+        return blockers
 
     async def finish(self, status: str, summary: str) -> None:
         async with db_session() as session:

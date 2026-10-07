@@ -55,6 +55,8 @@ async def test_profile_surfaces_the_planted_defects(db_session, planted):
     p = await profile_campaign(db_session, planted.id, unregistered_states={"FL"})
     assert p["total"] == 6
     assert p["postal_shapes"]["9999"] == 3
+    assert len(p["malformed_postal_codes"]) == 3  # ids, so an agent never has to guess
+    assert {m["external_id"][-1] for m in p["malformed_postal_codes"]} == {"1", "2", "3"}
     assert p["do_not_contact"] == 1
     assert p["in_unregistered_states"] == 1
 
