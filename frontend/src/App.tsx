@@ -5,16 +5,21 @@ import { RunDetail } from "./components/RunDetail";
 import { NewRunForm } from "./components/NewRunForm";
 import { Login } from "./components/Login";
 import { DonorImport } from "./components/DonorImport";
+import { Campaigns } from "./components/Campaigns";
+import { CampaignDetail } from "./components/CampaignDetail";
+import { AgentRunView } from "./components/AgentRunView";
 import { clearToken, getCurrentUser, getToken } from "./api";
 import type { UserRead } from "./types";
 import "./App.css";
 
-type View = "queue" | "history" | "donors";
+type View = "queue" | "history" | "donors" | "campaigns";
 
 function App() {
   const [view, setView] = useState<View>("queue");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lookupId, setLookupId] = useState("");
+  const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [agentRunId, setAgentRunId] = useState<string | null>(null);
   const [user, setUser] = useState<UserRead | null>(null);
   const [checkedAuth, setCheckedAuth] = useState(false);
 
@@ -97,12 +102,30 @@ function App() {
             >
               Donors
             </button>
+            <button
+              type="button"
+              onClick={() => setView("campaigns")}
+              disabled={view === "campaigns"}
+            >
+              Campaigns
+            </button>
           </div>
         </div>
       )}
 
       {selectedId ? (
         <RunDetail id={selectedId} onBack={() => setSelectedId(null)} />
+      ) : view === "campaigns" && agentRunId ? (
+        <AgentRunView id={agentRunId} onBack={() => setAgentRunId(null)} />
+      ) : view === "campaigns" && campaignId ? (
+        <CampaignDetail
+          id={campaignId}
+          isAdmin={user.role === "admin"}
+          onBack={() => setCampaignId(null)}
+          onOpenAgentRun={setAgentRunId}
+        />
+      ) : view === "campaigns" ? (
+        <Campaigns isAdmin={user.role === "admin"} onSelect={setCampaignId} />
       ) : view === "donors" ? (
         <DonorImport isAdmin={user.role === "admin"} onViewRun={setSelectedId} />
       ) : view === "history" ? (

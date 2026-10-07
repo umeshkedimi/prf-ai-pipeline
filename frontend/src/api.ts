@@ -1,4 +1,10 @@
 import type {
+  AgentApprovalDecision,
+  AgentRunCreate,
+  AgentRunDetail,
+  AgentRunRead,
+  CampaignRead,
+  CampaignSummary,
   DonorIngestResult,
   DonorUnrunRead,
   HeldLetterDecision,
@@ -104,14 +110,15 @@ export function startWorkflowRun(payload: WorkflowRunCreate): Promise<WorkflowRu
   });
 }
 
-export async function ingestDonorsCsv(file: File): Promise<DonorIngestResult> {
+export async function ingestDonorsCsv(file: File, campaignId?: string): Promise<DonorIngestResult> {
   const token = getToken();
   const formData = new FormData();
   formData.append("file", file);
   // No Content-Type header here -- the browser sets it (with the multipart
   // boundary) itself; forcing application/json like request() does would
   // break the upload.
-  const response = await fetch(`${BASE_URL}/donors/ingest`, {
+  const query = campaignId ? `?campaign_id=${encodeURIComponent(campaignId)}` : "";
+  const response = await fetch(`${BASE_URL}/donors/ingest${query}`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
@@ -145,4 +152,41 @@ export async function fetchWorkflowPdf(id: string): Promise<Blob> {
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return response.blob();
+}
+
+export function listCampaigns(): Promise<CampaignRead[]> {
+  return request("/campaigns");
+}
+
+export function createCampaign(name: string, appealCode?: string): Promise<CampaignRead> {
+  return request("/campaigns", {
+    method: "POST",
+    body: JSON.stringify({ name, appeal_code: appealCode || null }),
+  });
+}
+
+export function getCampaign(id: string): Promise<CampaignSummary> {
+  return request(`/campaigns/${id}`);
+}
+
+export function listAgentRuns(campaignId: string): Promise<AgentRunRead[]> {
+  return request(`/campaigns/${campaignId}/agent-runs`);
+}
+
+export function startAgentRun(campaignId: string, payload: AgentRunCreate): Promise<AgentRunRead> {
+  return request(`/campaigns/${campaignId}/agent/run`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getAgentRun(id: string): Promise<AgentRunDetail> {
+  return request(`/agent-runs/${id}`);
+}
+
+export function decideAgentApproval(id: string, decision: AgentApprovalDecision): Promise<AgentRunRead> {
+  return request(`/agent-runs/${id}/approval`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+  });
 }

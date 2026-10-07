@@ -133,3 +133,96 @@ export interface WorkflowRunBatchItem {
   workflow_run_id: string | null;
   error: string | null;
 }
+
+// --- Phase 10: campaigns and the campaign agent (mirrors schemas/campaigns.py, schemas/agent.py) ---
+
+export interface CampaignRead {
+  id: string;
+  name: string;
+  appeal_code: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  status: string;
+}
+
+export interface CampaignSummary extends CampaignRead {
+  donor_counts: Record<string, number>;
+  total_donors: number;
+}
+
+export type AgentRunStatus =
+  | "running"
+  | "awaiting_approval"
+  | "completed"
+  | "budget_exhausted"
+  | "stopped"
+  | "failed";
+
+export type AgentTier = "read" | "propose" | "act" | "irreversible";
+
+export interface AgentBudget {
+  max_steps: number;
+  max_tokens: number;
+  max_runs: number;
+  steps: number;
+  tokens: number;
+  runs: number;
+}
+
+export interface AgentPendingApproval {
+  tool_call_id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  rationale: string;
+}
+
+export interface AgentStep {
+  seq: number;
+  tool: string;
+  tier: AgentTier | null;
+  args: Record<string, unknown> | null;
+  outcome: string;
+  observation: unknown;
+  latency_ms: number | null;
+  created_at: string;
+}
+
+export interface AgentRunRead {
+  id: string;
+  campaign_id: string;
+  goal: string;
+  status: AgentRunStatus;
+  budget: AgentBudget;
+  pending_approval: AgentPendingApproval | null;
+  final_report: AgentFinalReport | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface AgentRunDetail extends AgentRunRead {
+  steps: AgentStep[];
+}
+
+export interface AgentFinalReport {
+  agent_summary?: string;
+  campaign_status_counts?: Record<string, number>;
+  proposals?: { kind: string | null; donor_external_ids: string[]; reason: string | null }[];
+  actions?: { tool: string; tier: string; launched?: number; changed?: number }[];
+  human_decisions?: { tool?: string; approved?: boolean; reviewer?: string; notes?: string | null }[];
+  refused_calls?: Record<string, number>;
+  steps?: number;
+  error?: string;
+}
+
+export interface AgentRunCreate {
+  goal?: string;
+  max_steps?: number;
+  max_tokens?: number;
+  max_runs?: number;
+}
+
+export interface AgentApprovalDecision {
+  tool: string;
+  approve: boolean;
+  notes?: string;
+}
