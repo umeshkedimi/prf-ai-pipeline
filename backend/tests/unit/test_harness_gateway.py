@@ -153,3 +153,16 @@ def test_budget_snapshot_round_trips():
     b.charge_step()
     b.charge_tokens(7)
     assert Budget.from_snapshot(b.snapshot()) == b
+
+
+async def test_events_share_the_seq_space_with_tool_calls_and_resume_continues_it():
+    seen: list[AuditRecord] = []
+
+    async def sink(rec):
+        seen.append(rec)
+
+    gw = ToolGateway([_spec()], {"t"}, Budget(), sink, start_seq=10)
+    await gw.call("t", {})
+    await gw.log_event("human_decision", {"approved": True})
+    await gw.call("t", {})
+    assert [r.seq for r in seen] == [11, 12, 13]

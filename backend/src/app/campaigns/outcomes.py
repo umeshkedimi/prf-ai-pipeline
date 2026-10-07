@@ -57,7 +57,9 @@ def campaign_donor_status(reason: str) -> str:
     """Map a run's reason to the campaign_donors.status it implies."""
     if reason == "ok":
         return "ready"
-    if reason in {"pending", "running"}:
+    if reason == "pending":
+        return "queued"
+    if reason == "running":
         return "running"
     if reason in {"ineligible", "unregistered_state", "discarded"}:
         return "blocked"

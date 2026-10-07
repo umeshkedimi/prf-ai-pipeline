@@ -42,6 +42,8 @@ def test_reason_ok_low_confidence_and_failed():
 
 def test_campaign_donor_status_mapping():
     assert campaign_donor_status("ok") == "ready"
+    assert campaign_donor_status("pending") == "queued"
+    assert campaign_donor_status("running") == "running"
     assert campaign_donor_status("unregistered_state") == "blocked"
     assert campaign_donor_status("paused:recommendation_requires_approval") == "held"
 

@@ -53,10 +53,17 @@ def generate_campaign_rows(
     idx = list(range(len(rows)))
     rng.shuffle(idx)
     take = lambda k: [idx.pop() for _ in range(k)]  # noqa: E731
-    bad_zip_rows, unreg_rows, dnc_rows, dup_src = take(bad_zip), take(unregistered), take(dnc), take(dup_pairs)
+    # A spreadsheet dropped the leading zero from New England ZIPs ("02134" -> "2134"):
+    # one shared, deterministically fixable defect (left-pad to 5 digits).
+    bad_zip_rows = [i for i in idx if rows[i]["state"] == "MA"][:bad_zip]
+    if len(bad_zip_rows) < bad_zip:
+        raise ValueError(f"n={n} has too few MA donors for {bad_zip} leading-zero ZIP defects")
+    idx = [i for i in idx if i not in set(bad_zip_rows)]
+    unreg_rows, dnc_rows, dup_src = take(unregistered), take(dnc), take(dup_pairs)
 
-    for i in bad_zip_rows:  # a spreadsheet dropped the leading digit: one shared defect
-        rows[i]["postal_code"] = rows[i]["postal_code"][1:]
+    correct_zip = {rows[i]["external_id"]: rows[i]["postal_code"] for i in bad_zip_rows}
+    for i in bad_zip_rows:
+        rows[i]["postal_code"] = rows[i]["postal_code"].lstrip("0")
     for i in unreg_rows:
         rows[i]["city"], rows[i]["state"] = UNREGISTERED[0], UNREGISTERED[1]
         rows[i]["postal_code"] = f"{UNREGISTERED[2]}{rng.randint(10, 99)}"
@@ -77,6 +84,7 @@ def generate_campaign_rows(
         "total": len(rows),
         "bad_zip_external_ids": sorted(rows[i]["external_id"] for i in bad_zip_rows),
         "bad_zip_shape": "9999",
+        "bad_zip_correct_values": dict(sorted(correct_zip.items())),
         "unregistered_external_ids": sorted(rows[i]["external_id"] for i in unreg_rows),
         "unregistered_state": UNREGISTERED[1],
         "do_not_contact_external_ids": sorted(rows[i]["external_id"] for i in dnc_rows),

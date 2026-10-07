@@ -3,18 +3,28 @@ time: no argument model has a campaign_id, so the agent cannot read or touch ano
 campaign no matter what it is told. Read tools wrap the deterministic set-level
 queries; the agent never counts, groups or derives status itself.
 
-Act and irreversible tools (launching runs, approving mail) are added with the agent
-loop. A PROPOSE call has no side effect of its own: the gateway's audit row
-(tier=propose) IS the record, and the final report is built from those rows."""
+A PROPOSE call has no side effect of its own: the gateway's audit row (tier=propose)
+IS the record, and the final report is built from those rows. ACT tools are charged
+against the run budget; the IRREVERSIBLE tool cannot execute without a human."""
 
+import asyncio
+import re
+import time
 import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from app.campaigns import queries
+from app.campaigns.membership import status_counts
+from app.campaigns.status import sync_statuses
+from app.db.models import CampaignDonor, Donor, WorkflowRun
 from app.db.session import db_session
 from app.harness.tools import Tier, ToolSpec
+
+MAX_LAUNCH_BATCH = 100
+_FOUR_DIGITS = re.compile(r"^\d{4}$")
 
 
 class _NoArgs(BaseModel):
@@ -35,8 +45,31 @@ class _ProposeArgs(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
 
 
+class _LaunchArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    external_ids: list[str] = Field(min_length=1, max_length=MAX_LAUNCH_BATCH)
+
+
+class _PadZipArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    external_ids: list[str] = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=10, max_length=500)
+
+
+class _WaitArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_seconds: int = Field(default=60, ge=5, le=120)
+
+
 def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) -> list[ToolSpec]:
+    async def refreshed():
+        """Brings campaign_donors.status up to date before a read (idempotent)."""
+        async with db_session() as s:
+            await sync_statuses(s, campaign_id)
+            await s.commit()
+
     async def profile(_: _NoArgs):
+        await refreshed()
         async with db_session() as s:
             return await queries.profile_campaign(s, campaign_id, unregistered_states)
 
@@ -45,12 +78,83 @@ def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) 
             return await queries.find_duplicate_pairs(s, campaign_id)
 
     async def clusters(_: _NoArgs):
+        await refreshed()
         async with db_session() as s:
             return await queries.cluster_failures(s, campaign_id)
 
     async def by_status(a: _ListArgs):
+        await refreshed()
         async with db_session() as s:
             return await queries.list_donors_by_status(s, campaign_id, a.status, a.limit, a.offset)
+
+    async def launch(a: _LaunchArgs):
+        from app.workers.tasks import run_workflow  # lazy: tasks imports the whole graph
+
+        wanted = list(dict.fromkeys(a.external_ids))
+        launched: list[str] = []
+        skipped: list[dict] = []
+        run_ids: list[uuid.UUID] = []
+        async with db_session() as s:
+            rows = (
+                await s.execute(
+                    select(Donor, CampaignDonor)
+                    .join(CampaignDonor, CampaignDonor.donor_id == Donor.id)
+                    .where(CampaignDonor.campaign_id == campaign_id, Donor.external_id.in_(wanted))
+                )
+            ).all()
+            found = {d.external_id: (d, cd) for d, cd in rows}
+            for ext in wanted:
+                if ext not in found:
+                    skipped.append({"external_id": ext, "reason": "not_in_campaign"})
+                elif found[ext][1].status != "staged":
+                    skipped.append({"external_id": ext, "reason": f"status_is_{found[ext][1].status}"})
+                else:
+                    donor, member = found[ext]
+                    run = WorkflowRun(donor_id=donor.id, campaign_id=campaign_id)
+                    s.add(run)
+                    await s.flush()
+                    member.status = "queued"
+                    run_ids.append(run.id)
+                    launched.append(ext)
+            await s.commit()
+        for rid in run_ids:
+            run_workflow.delay(str(rid))
+        return {"launched": len(launched), "skipped": skipped, "launched_external_ids": launched}
+
+    async def wait(a: _WaitArgs):
+        deadline = time.monotonic() + a.max_seconds
+        while True:
+            await refreshed()
+            async with db_session() as s:
+                counts = await status_counts(s, campaign_id)
+            in_flight = counts["queued"] + counts["running"]
+            if in_flight == 0 or time.monotonic() >= deadline:
+                return {"in_flight": in_flight, "status_counts": counts, "timed_out": in_flight > 0}
+            await asyncio.sleep(5)
+
+    async def pad_zips(a: _PadZipArgs):
+        changed: list[dict] = []
+        skipped: list[dict] = []
+        async with db_session() as s:
+            rows = (
+                await s.execute(
+                    select(Donor)
+                    .join(CampaignDonor, CampaignDonor.donor_id == Donor.id)
+                    .where(CampaignDonor.campaign_id == campaign_id, Donor.external_id.in_(a.external_ids))
+                )
+            ).scalars().all()
+            found = {d.external_id: d for d in rows}
+            for ext in dict.fromkeys(a.external_ids):
+                donor = found.get(ext)
+                if donor is None:
+                    skipped.append({"external_id": ext, "reason": "not_in_campaign"})
+                elif not _FOUR_DIGITS.match(donor.postal_code or ""):
+                    skipped.append({"external_id": ext, "reason": "postal_code_not_4_digits"})
+                else:
+                    before, donor.postal_code = donor.postal_code, "0" + donor.postal_code
+                    changed.append({"external_id": ext, "before": before, "after": donor.postal_code})
+            await s.commit()
+        return {"changed": len(changed), "changes": changed, "skipped": skipped}
 
     async def propose(a: _ProposeArgs):
         return {"recorded": True, "kind": a.kind, "donors": len(a.donor_external_ids),
@@ -65,6 +169,15 @@ def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) 
                  "such as a ZIP shape or state). Use this to find systemic problems.", Tier.READ, _NoArgs, clusters),
         ToolSpec("list_donors_by_status", "Page through donors in a given campaign status.",
                  Tier.READ, _ListArgs, by_status),
+        ToolSpec("wait_for_runs", "Wait (up to max_seconds) for launched donor runs to finish, then return "
+                 "the campaign's status counts. Use after launching a batch, before reading outcomes.",
+                 Tier.READ, _WaitArgs, wait, timeout_s=150),
+        ToolSpec("launch_donor_runs", f"Start the donor workflow for up to {MAX_LAUNCH_BATCH} staged donors "
+                 "(by external_id). Each donor counts against the run budget. Only 'staged' donors launch.",
+                 Tier.ACT, _LaunchArgs, launch, run_cost=lambda a: len(set(a.external_ids))),
+        ToolSpec("pad_postal_codes", "Fix postal codes that lost a leading zero (4 digits -> 5) for the given "
+                 "donors. Edits donor records permanently, so it requires human approval.",
+                 Tier.IRREVERSIBLE, _PadZipArgs, pad_zips),
         ToolSpec("propose_action", "Record a proposed action (hold/skip/bulk_fix/needs_human_decision) with a "
                  "reason for a human to review. Changes nothing.", Tier.PROPOSE, _ProposeArgs, propose),
     ]
@@ -72,5 +185,8 @@ def build_campaign_tools(campaign_id: uuid.UUID, unregistered_states: set[str]) 
 
 # What the campaign agent may call. Anything not listed here is DENIED by the gateway.
 CAMPAIGN_AGENT_ALLOWLIST = frozenset(
-    {"profile_campaign", "find_duplicate_pairs", "cluster_failures", "list_donors_by_status", "propose_action"}
+    {
+        "profile_campaign", "find_duplicate_pairs", "cluster_failures", "list_donors_by_status",
+        "wait_for_runs", "launch_donor_runs", "pad_postal_codes", "propose_action",
+    }
 )

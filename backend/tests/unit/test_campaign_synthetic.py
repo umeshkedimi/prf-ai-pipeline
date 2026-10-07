@@ -16,6 +16,8 @@ def test_manifest_matches_the_rows():
     assert len(by_id) == len(rows) == m["total"]  # unique ids
     assert len(m["bad_zip_external_ids"]) == 8
     assert all(postal_shape(by_id[i]["postal_code"]) == "9999" for i in m["bad_zip_external_ids"])
+    # the planted defect is exactly fixable: left-padding restores the original ZIP
+    assert all(by_id[i]["postal_code"].zfill(5) == m["bad_zip_correct_values"][i] for i in m["bad_zip_external_ids"])
     assert all(by_id[i]["state"] == "FL" for i in m["unregistered_external_ids"])
     assert all(by_id[i]["do_not_contact"] == "true" for i in m["do_not_contact_external_ids"])
     assert len(m["duplicate_pairs"]) == 2

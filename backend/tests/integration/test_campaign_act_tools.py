@@ -1,0 +1,89 @@
+"""ACT and IRREVERSIBLE tools against a real DB. Celery's .delay is patched out:
+launching must create the run rows and mark donors queued without starting an LLM run."""
+
+import uuid
+
+import pytest
+from sqlalchemy import delete, select
+
+from app.campaigns.membership import attach_donors_by_external_id
+from app.campaigns.status import sync_statuses
+from app.db.models import Campaign, CampaignDonor, Donor, WorkflowRun
+from app.db.session import db_session
+from app.harness.budget import Budget
+from app.harness.campaign_tools import CAMPAIGN_AGENT_ALLOWLIST, build_campaign_tools
+from app.harness.gateway import Outcome, ToolGateway
+
+pytestmark = pytest.mark.integration
+_TAG = uuid.uuid4().hex[:6]
+
+
+@pytest.fixture
+async def campaign(monkeypatch):
+    launched = []
+    from app.workers import tasks
+
+    monkeypatch.setattr(tasks.run_workflow, "delay", lambda rid: launched.append(rid))
+    async with db_session() as s:
+        c = Campaign(name=f"act-{_TAG}")
+        donors = [
+            Donor(external_id=f"at-{_TAG}-1", first_name="A", last_name="One", state="MA", postal_code="2134"),
+            Donor(external_id=f"at-{_TAG}-2", first_name="B", last_name="Two", state="WA", postal_code="98101"),
+        ]
+        s.add(c)
+        s.add_all(donors)
+        await s.commit()
+        await attach_donors_by_external_id(s, c.id, [d.external_id for d in donors])
+        await s.commit()
+        cid = c.id
+    yield cid, launched
+    async with db_session() as s:
+        await s.execute(delete(WorkflowRun).where(WorkflowRun.campaign_id == cid))
+        await s.execute(delete(CampaignDonor).where(CampaignDonor.campaign_id == cid))
+        await s.execute(delete(Donor).where(Donor.external_id.like(f"at-{_TAG}-%")))
+        await s.execute(delete(Campaign).where(Campaign.id == cid))
+        await s.commit()
+
+
+def _gw(cid, **kw):
+    return ToolGateway(build_campaign_tools(cid, set()), set(CAMPAIGN_AGENT_ALLOWLIST), Budget(**kw))
+
+
+async def test_pad_zip_edits_only_four_digit_codes_and_only_when_approved(campaign):
+    cid, _ = campaign
+    gw = _gw(cid)
+    args = {"external_ids": [f"at-{_TAG}-1", f"at-{_TAG}-2"], "reason": "leading zero dropped by spreadsheet"}
+    assert (await gw.call("pad_postal_codes", args)).outcome is Outcome.NEEDS_APPROVAL
+    async with db_session() as s:
+        d = (await s.execute(select(Donor).where(Donor.external_id == f"at-{_TAG}-1"))).scalar_one()
+        assert d.postal_code == "2134"  # untouched without approval
+    r = await gw.call("pad_postal_codes", args, approved=True)
+    assert r.observation["changed"] == 1
+    assert r.observation["changes"][0] == {"external_id": f"at-{_TAG}-1", "before": "2134", "after": "02134"}
+    assert r.observation["skipped"] == [{"external_id": f"at-{_TAG}-2", "reason": "postal_code_not_4_digits"}]
+
+
+async def test_launch_creates_runs_marks_queued_and_refuses_a_second_launch(campaign):
+    cid, launched = campaign
+    gw = _gw(cid)
+    r = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1", "not-a-donor"]})
+    assert r.observation["launched"] == 1 and len(launched) == 1
+    assert r.observation["skipped"] == [{"external_id": "not-a-donor", "reason": "not_in_campaign"}]
+    again = await gw.call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-1"]})
+    assert again.observation["skipped"][0]["reason"] == "status_is_queued" and len(launched) == 1
+
+
+async def test_sync_marks_a_completed_run_ready_and_an_unregistered_one_blocked(campaign):
+    cid, _ = campaign
+    async with db_session() as s:
+        d1, d2 = (await s.execute(select(Donor).where(Donor.external_id.like(f"at-{_TAG}-%"))
+                                  .order_by(Donor.external_id))).scalars().all()
+        s.add(WorkflowRun(donor_id=d1.id, campaign_id=cid, status="completed", result={}))
+        s.add(WorkflowRun(donor_id=d2.id, campaign_id=cid, status="completed",
+                          result={"compliance": {"registered_to_solicit": False}}))
+        await s.commit()
+        await sync_statuses(s, cid)
+        await s.commit()
+        rows = {r.donor_id: (r.status, r.status_reason) for r in
+                (await s.execute(select(CampaignDonor).where(CampaignDonor.campaign_id == cid))).scalars()}
+    assert rows[d1.id] == ("ready", None) and rows[d2.id] == ("blocked", "unregistered_state")

@@ -16,9 +16,23 @@ def test_allowlist_matches_the_registry_exactly():
     assert {t.name for t in tools} == set(CAMPAIGN_AGENT_ALLOWLIST)
 
 
-def test_only_read_and_propose_tiers_are_registered_so_far():
+def test_the_only_irreversible_tool_is_the_data_edit_and_it_needs_approval():
     tools, _ = _gw()
-    assert {t.tier for t in tools} <= {Tier.READ, Tier.PROPOSE}
+    assert {t.name for t in tools if t.tier is Tier.IRREVERSIBLE} == {"pad_postal_codes"}
+    assert {t.name for t in tools if t.tier is Tier.ACT} == {"launch_donor_runs"}
+
+
+async def test_irreversible_edit_is_not_executed_without_approval():
+    _, gw = _gw()
+    r = await gw.call("pad_postal_codes", {"external_ids": ["a"], "reason": "leading zeros dropped"})
+    assert r.outcome is Outcome.NEEDS_APPROVAL
+
+
+async def test_launch_cost_is_the_number_of_distinct_donors():
+    tools, gw = _gw()
+    gw.budget.max_runs = 2
+    r = await gw.call("launch_donor_runs", {"external_ids": ["a", "b", "c"]})
+    assert r.outcome is Outcome.BUDGET_EXHAUSTED and r.observation["requested"] == 3
 
 
 async def test_no_tool_accepts_a_campaign_id_so_scope_cannot_be_escaped():

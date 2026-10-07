@@ -88,7 +88,7 @@ async def find_duplicate_pairs(session: AsyncSession, campaign_id: uuid.UUID) ->
     ]
 
 
-async def _latest_runs(session: AsyncSession, campaign_id: uuid.UUID):
+async def latest_runs(session: AsyncSession, campaign_id: uuid.UUID):
     """Each campaign donor's most recent run (donors never run are absent)."""
     stmt = (
         select(WorkflowRun, Donor)
@@ -108,7 +108,7 @@ async def cluster_failures(session: AsyncSession, campaign_id: uuid.UUID) -> lis
             "state": donor.state,
             "postal_code": donor.postal_code,
         }
-        for run, donor in await _latest_runs(session, campaign_id)
+        for run, donor in await latest_runs(session, campaign_id)
     ]
     return group_failures(rows)
 

@@ -76,11 +76,15 @@ class ToolGateway:
         allowlist: set[str],
         budget: Budget,
         audit: AuditSink | None = None,
+        start_seq: int = 0,
     ) -> None:
         self._tools = {t.name: t for t in tools}
         self._allowlist = set(allowlist)
         self.budget = budget
         self._audit = audit
+        # Own counter (not budget.steps): human decisions are audited too and must not
+        # collide with tool-call seqs. A resumed run passes the last persisted seq.
+        self._seq = start_seq
 
     def describe(self) -> list[dict]:
         """What the model is told it can use: allowlisted tools only."""
@@ -147,14 +151,28 @@ class ToolGateway:
     async def _record(self, result: ToolResult, started: float) -> None:
         if self._audit is None:
             return
+        self._seq += 1
         await self._audit(
             AuditRecord(
-                seq=self.budget.steps,
+                seq=self._seq,
                 tool=result.tool,
                 tier=result.tier,
                 args=_jsonable(result.args),
                 outcome=result.outcome,
                 observation=result.observation,
                 latency_ms=int((time.monotonic() - started) * 1000),
+            )
+        )
+
+    async def log_event(self, tool: str, observation: Any, args: dict | None = None) -> None:
+        """Audit something that is not a tool call (e.g. a human's approval decision)
+        into the same ordered trajectory. Costs no budget."""
+        if self._audit is None:
+            return
+        self._seq += 1
+        await self._audit(
+            AuditRecord(
+                seq=self._seq, tool=tool, tier=None, args=_jsonable(args or {}),
+                outcome=Outcome.OK, observation=_jsonable(observation), latency_ms=0,
             )
         )
