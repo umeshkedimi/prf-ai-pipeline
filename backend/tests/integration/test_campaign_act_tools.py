@@ -95,6 +95,11 @@ async def test_launch_refuses_the_second_member_of_a_probable_duplicate_pair(cam
     r = await _gw(cid).call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-t1", f"at-{_TAG}-t2"]})
     assert r.observation["launched"] == 1 and len(launched) == 1
     assert r.observation["skipped"][0]["reason"].startswith("probable_duplicate_of_")
+    # recorded, not just refused: the donor is held with its cause, deterministically
+    async with db_session() as s:
+        held = (await s.execute(select(CampaignDonor).where(
+            CampaignDonor.campaign_id == cid, CampaignDonor.status == "held"))).scalars().all()
+    assert len(held) == 1 and held[0].status_reason.startswith("probable_duplicate_of_")
 
 
 async def test_sync_marks_a_completed_run_ready_and_an_unregistered_one_blocked(campaign):

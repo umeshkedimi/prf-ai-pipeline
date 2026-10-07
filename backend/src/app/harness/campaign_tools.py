@@ -123,6 +123,12 @@ def build_campaign_tools(
             secondary = {p["b"]: p["a"] for p in await queries.find_duplicate_pairs(s, campaign_id)}
             for ext in wanted:
                 if ext in secondary and ext in found:
+                    # Not just refused: recorded. The donor is held with its cause so it
+                    # shows up as needing a person whether or not the model ever says so
+                    # (a live run lost this pair when the model's proposal call was malformed).
+                    if found[ext][1].status == "staged":
+                        found[ext][1].status = "held"
+                        found[ext][1].status_reason = f"probable_duplicate_of_{secondary[ext]}"
                     skipped.append({
                         "external_id": ext,
                         "reason": f"probable_duplicate_of_{secondary[ext]}",

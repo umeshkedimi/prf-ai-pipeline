@@ -188,3 +188,9 @@ async def test_precheck_refuses_before_the_approval_gate_so_a_human_is_never_ask
     bad = await gw.call("edit", {"n": 0})
     assert bad.outcome is Outcome.INVALID_ARGS and bad.observation == {"errors": ["ids not eligible"]}
     assert (await gw.call("edit", {"n": 1})).outcome is Outcome.NEEDS_APPROVAL
+
+
+async def test_invalid_args_tell_the_model_what_the_tool_expects():
+    r = await _gw(_spec()).call("t", {"nope": 1})
+    assert r.outcome is Outcome.INVALID_ARGS
+    assert r.observation["expected"]["properties"] == ["n"]

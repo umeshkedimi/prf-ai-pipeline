@@ -16,7 +16,7 @@ class AgentState(TypedDict):
     nudges: int  # times the completion check sent the agent back to work
 
 
-MAX_NUDGES = 2
+MAX_NUDGES = 4
 
 
 class Hooks(Protocol):
@@ -67,7 +67,7 @@ def build_agent_graph(model: Any, gateway: ToolGateway, hooks: Hooks) -> StateGr
         if not blockers:
             return {}
         text = ("You replied without a tool call, but the work is not finished: "
-                + "; ".join(blockers) + ". Continue with the next tool call.")
+                + "; ".join(blockers) + ". Reply with the next tool call itself (not text describing one).")
         return {"messages": [HumanMessage(text)], "nudges": (state.get("nudges") or 0) + 1}
 
     async def act(state: AgentState) -> dict:

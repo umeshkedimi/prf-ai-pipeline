@@ -125,7 +125,9 @@ class ToolGateway:
             parsed = spec.args_model.model_validate(args)
         except ValidationError as exc:
             errors = [f"{'.'.join(map(str, e['loc'])) or '(root)'}: {e['msg']}" for e in exc.errors()]
-            return ToolResult(Outcome.INVALID_ARGS, name, {"errors": errors}, spec.tier, args)
+            schema = spec.args_model.model_json_schema()
+            expected = {"required": schema.get("required", []), "properties": list(schema.get("properties", {}))}
+            return ToolResult(Outcome.INVALID_ARGS, name, {"errors": errors, "expected": expected}, spec.tier, args)
 
         if spec.precheck is not None:
             problem = await spec.precheck(parsed)

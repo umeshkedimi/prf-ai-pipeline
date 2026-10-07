@@ -2,6 +2,8 @@ const COLORS: Record<string, string> = {
   awaiting_review: "#b45309",
   needs_review: "#b45309",
   completed: "#15803d",
+  completed_with_gaps: "#b45309",
+  budget_exhausted: "#b91c1c",
   failed: "#b91c1c",
   discarded: "#57534e",
   running: "#1d4ed8",

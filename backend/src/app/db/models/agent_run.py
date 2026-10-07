@@ -11,6 +11,7 @@ AGENT_RUN_STATUSES = (
     "running",
     "awaiting_approval",  # paused on an irreversible tool call; see pending_approval
     "completed",  # the agent finished and produced final_report
+    "completed_with_gaps",  # it stopped, but donors were still in flight or unaddressed
     "budget_exhausted",
     "stopped",  # a human stopped it
     "failed",

@@ -12,7 +12,7 @@ from app.db.session import db_session
 from app.harness.budget import Budget
 from app.harness.gateway import AuditRecord, AuditSink
 
-_TERMINAL = {"completed", "budget_exhausted", "stopped", "failed"}
+_TERMINAL = {"completed", "completed_with_gaps", "budget_exhausted", "stopped", "failed"}
 
 
 async def create_agent_run(

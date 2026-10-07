@@ -6,8 +6,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict
 
-from app.campaign_agent.loop import build_agent_graph
-from app.campaign_agent.report import summarize_steps
+from app.campaign_agent.loop import MAX_NUDGES, build_agent_graph
+from app.campaign_agent.report import decide_final_status, summarize_steps
 from app.harness.budget import Budget
 from app.harness.gateway import ToolGateway
 from app.harness.tools import Tier, ToolSpec
@@ -155,9 +155,26 @@ async def test_premature_finish_is_sent_back_to_work_then_accepted_when_clear():
 
 
 async def test_the_agent_cannot_be_nudged_forever():
-    script = _Script(*[AIMessage(content=f"done {i}") for i in range(5)])
+    script = _Script(*[AIMessage(content=f"done {i}") for i in range(MAX_NUDGES + 3)])
     graph, gw, hooks, _ = _setup([])
     hooks.blockers = [["x"]] * 20
     graph = build_agent_graph(script, gw, hooks).compile(checkpointer=MemorySaver())
     await graph.ainvoke({"messages": [HumanMessage("go")]}, _cfg())
-    assert hooks.finished[0] == "completed" and len(script.seen) == 3  # initial + MAX_NUDGES
+    assert hooks.finished[0] == "completed" and len(script.seen) == 1 + MAX_NUDGES
+
+
+def test_duplicate_guard_skips_are_reported_without_the_model_saying_anything():
+    steps = [{"tool": "launch_donor_runs", "tier": "act", "outcome": "ok",
+              "observation": {"launched": 3, "skipped": [
+                  {"external_id": "b", "reason": "probable_duplicate_of_a"},
+                  {"external_id": "z", "reason": "not_in_campaign"}]}},
+             {"tool": "launch_donor_runs", "tier": "act", "outcome": "ok",
+              "observation": {"launched": 0, "skipped": [{"external_id": "b", "reason": "probable_duplicate_of_a"}]}}]
+    assert summarize_steps(steps)["duplicate_holds"] == [{"external_id": "b", "duplicate_of": "a"}]
+
+
+def test_completed_is_only_claimed_when_nothing_is_left():
+    assert decide_final_status("completed", {"in_flight": 0, "staged_unaddressed": []}) == "completed"
+    assert decide_final_status("completed", {"in_flight": 4, "staged_unaddressed": []}) == "completed_with_gaps"
+    assert decide_final_status("completed", {"in_flight": 0, "staged_unaddressed": ["x"]}) == "completed_with_gaps"
+    assert decide_final_status("budget_exhausted", {"in_flight": 9}) == "budget_exhausted"  # never upgraded

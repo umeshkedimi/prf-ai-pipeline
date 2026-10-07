@@ -13,7 +13,7 @@ from sqlalchemy import distinct, select
 
 from app.campaign_agent.loop import build_agent_graph
 from app.campaign_agent.prompts import SYSTEM_PROMPT, goal_message
-from app.campaign_agent.report import summarize_steps
+from app.campaign_agent.report import decide_final_status, summarize_steps
 from app.campaigns.membership import status_counts
 from app.campaigns.queries import list_donors_by_status
 from app.campaigns.status import sync_statuses
@@ -35,7 +35,10 @@ from app.mcp_clients.compliance_client import get_compliance_tools, parse_single
 
 log = get_logger(__name__)
 
-SETTLE_SECONDS = 300
+# The settle wait ends when nothing has changed for this long (a stuck pipeline) or at
+# the hard cap -- not at a fixed time, because how long a list takes depends on its size.
+SETTLE_IDLE_SECONDS = 300
+SETTLE_MAX_SECONDS = 1800
 
 
 async def unregistered_states(campaign_id: uuid.UUID) -> set[str]:
@@ -76,15 +79,21 @@ class StoreHooks:
     async def request_approval(self, pending: dict) -> None:
         await store.request_approval(self.run_id, pending)
 
-    async def _settle(self, max_seconds: int) -> None:
-        deadline = time.monotonic() + max_seconds
-        while time.monotonic() < deadline:
+    async def _settle(self) -> None:
+        start = last_change = time.monotonic()
+        last = None
+        while time.monotonic() - start < SETTLE_MAX_SECONDS:
             async with db_session() as session:
                 await sync_statuses(session, self.campaign_id)
                 await session.commit()
                 counts = await status_counts(session, self.campaign_id)
-            if counts["queued"] + counts["running"] == 0:
+            in_flight = (counts["queued"], counts["running"])
+            if sum(in_flight) == 0:
                 return
+            if in_flight != last:
+                last, last_change = in_flight, time.monotonic()
+            elif time.monotonic() - last_change > SETTLE_IDLE_SECONDS:
+                return  # nothing has moved: report the gap rather than wait forever
             await asyncio.sleep(5)
 
     async def completion_blockers(self) -> list[str]:
@@ -112,19 +121,28 @@ class StoreHooks:
         # here, deterministically, so the report's counts are not a snapshot mid-flight.
         # Skipped on budget exhaustion: that stop should be prompt.
         if status == "completed":
-            await self._settle(SETTLE_SECONDS)
+            await self._settle()
         async with db_session() as session:
             await sync_statuses(session, self.campaign_id)
             await session.commit()
             counts = await status_counts(session, self.campaign_id)
         steps = await store.load_steps(self.run_id)
+        facts = summarize_steps(steps)
+        async with db_session() as session:
+            staged = await list_donors_by_status(session, self.campaign_id, "staged", limit=500)
+        proposed = {i for p in facts["proposals"] for i in p["donor_external_ids"]}
+        unresolved = {
+            "in_flight": counts["queued"] + counts["running"],
+            "staged_unaddressed": [d["external_id"] for d in staged if d["external_id"] not in proposed],
+        }
         report = {
             "agent_summary": summary,  # the model's words, verbatim
             "campaign_status_counts": counts,  # facts from the database
-            **summarize_steps(steps),
+            **facts,
+            "unresolved": unresolved,
             "budget": self.gateway.budget.snapshot(),
         }
-        await store.finish_run(self.run_id, status, report)
+        await store.finish_run(self.run_id, decide_final_status(status, unresolved), report)
 
 
 @asynccontextmanager

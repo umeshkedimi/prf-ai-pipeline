@@ -76,8 +76,35 @@ function StepRow({ step }: { step: AgentStep }) {
 
 function Report({ report }: { report: AgentFinalReport }) {
   if (report.error) return <p style={{ color: "#b91c1c" }}>Run failed: {report.error}</p>;
+  const gaps = report.unresolved;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {gaps && (gaps.in_flight > 0 || gaps.staged_unaddressed.length > 0) && (
+        <div style={{ border: "2px solid #b45309", borderRadius: 6, padding: 8 }}>
+          <strong>The agent stopped with work remaining.</strong>
+          <ul style={{ margin: "4px 0 0" }}>
+            {gaps.in_flight > 0 && <li>{gaps.in_flight} donor runs were still in flight when this report was written.</li>}
+            {gaps.staged_unaddressed.length > 0 && (
+              <li>
+                {gaps.staged_unaddressed.length} staged donors were neither launched nor proposed for a hold:{" "}
+                {gaps.staged_unaddressed.slice(0, 8).join(", ")}
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+      {report.duplicate_holds && report.duplicate_holds.length > 0 && (
+        <div>
+          <strong>Held as probable duplicates</strong> <em>(enforced in code; needs a person to decide)</em>
+          <ul>
+            {report.duplicate_holds.map((d) => (
+              <li key={d.external_id}>
+                {d.external_id} — duplicate of {d.duplicate_of}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {report.campaign_status_counts && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {Object.entries(report.campaign_status_counts).map(([k, v]) => (

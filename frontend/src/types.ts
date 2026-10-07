@@ -154,6 +154,7 @@ export type AgentRunStatus =
   | "running"
   | "awaiting_approval"
   | "completed"
+  | "completed_with_gaps"
   | "budget_exhausted"
   | "stopped"
   | "failed";
@@ -210,6 +211,8 @@ export interface AgentFinalReport {
   actions?: { tool: string; tier: string; launched?: number; changed?: number }[];
   human_decisions?: { tool?: string; approved?: boolean; reviewer?: string; notes?: string | null }[];
   refused_calls?: Record<string, number>;
+  duplicate_holds?: { external_id: string; duplicate_of: string }[];
+  unresolved?: { in_flight: number; staged_unaddressed: string[] };
   steps?: number;
   error?: string;
 }
