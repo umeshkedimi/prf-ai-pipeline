@@ -166,3 +166,12 @@ async def test_events_share_the_seq_space_with_tool_calls_and_resume_continues_i
     await gw.log_event("human_decision", {"approved": True})
     await gw.call("t", {})
     assert [r.seq for r in seen] == [11, 12, 13]
+
+
+async def test_run_budget_is_charged_for_what_launched_not_what_was_requested():
+    async def launch(a):
+        return {"launched": 2, "skipped": ["x"] * (a.n - 2)}
+
+    gw = _gw(_spec("launch", Tier.ACT, launch, run_cost=lambda a: a.n), budget=Budget(max_runs=10))
+    await gw.call("launch", {"n": 9})
+    assert gw.budget.runs == 2

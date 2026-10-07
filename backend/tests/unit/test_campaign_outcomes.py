@@ -72,3 +72,9 @@ def test_group_failures_finds_the_shared_cause_and_skips_ok():
     }
     assert {c["reason"] for c in clusters} == {"address_undeliverable", "unregistered_state"}
     assert sum(c["count"] for c in clusters) == 5  # the ok row is excluded
+
+
+def test_in_flight_runs_are_not_failure_clusters():
+    rows = [{"external_id": "a", "reason": "pending", "state": None, "postal_code": None},
+            {"external_id": "b", "reason": "running", "state": None, "postal_code": None}]
+    assert group_failures(rows) == []

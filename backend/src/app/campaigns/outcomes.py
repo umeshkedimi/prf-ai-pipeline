@@ -8,6 +8,8 @@ from collections import defaultdict
 from typing import Any
 
 SAMPLE_LIMIT = 20
+# Nothing to explain yet (still in flight) or nothing wrong: not a failure cluster.
+_NOT_FAILURES = {"ok", "pending", "running"}
 
 # Reasons whose root cause can sit in the address data, so the postal-code shape is
 # worth grouping on (a malformed ZIP column shows up as one shape across many donors).
@@ -75,10 +77,10 @@ def cluster_signature(reason: str, state: str | None, postal_code: str | None) -
 
 
 def group_failures(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """rows: {external_id, reason, state, postal_code}. Skips `ok`. Largest cluster first."""
+    """rows: {external_id, reason, state, postal_code}. Skips ok and in-flight runs. Largest cluster first."""
     groups: dict[tuple[str, str | None], list[str]] = defaultdict(list)
     for row in rows:
-        if row["reason"] == "ok":
+        if row["reason"] in _NOT_FAILURES:
             continue
         key = (row["reason"], cluster_signature(row["reason"], row.get("state"), row.get("postal_code")))
         groups[key].append(row["external_id"])

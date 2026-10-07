@@ -145,7 +145,10 @@ class ToolGateway:
             return ToolResult(Outcome.ERROR, name, {"error": f"timed out after {spec.timeout_s}s"}, spec.tier, args)
         except Exception as exc:  # noqa: BLE001 - a tool failure is an observation, not a crash
             return ToolResult(Outcome.ERROR, name, {"error": f"{type(exc).__name__}: {exc}"[:500]}, spec.tier, args)
-        self.budget.charge_runs(cost)
+        # The pre-check above is an upper bound (everything requested). What is charged is
+        # what actually happened: a tool that reports `launched` is billed for that.
+        actual = value.get("launched", cost) if isinstance(value, dict) else cost
+        self.budget.charge_runs(actual if cost else 0)
         return ToolResult(Outcome.OK, name, _cap(value), spec.tier, args)
 
     async def _record(self, result: ToolResult, started: float) -> None:
