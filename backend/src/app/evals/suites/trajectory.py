@@ -22,8 +22,8 @@ from app.evals.types import EvalCase, EvalSuite
 from app.graph.builder import build_graph
 
 VERIFICATION_ONLY = ["fetch_core_data", "gather_context", "synthesize_verdict"]
-THROUGH_ADDRESS = [*VERIFICATION_ONLY, "verify_address", "assess_and_normalize"]
-FULL_PIPELINE = [*THROUGH_ADDRESS, "compute_rfm", "recommend_ask"]
+THROUGH_ADDRESS = [*VERIFICATION_ONLY, "check_address"]
+FULL_PIPELINE = [*THROUGH_ADDRESS, "recommend_ask"]
 # A major-gift ask pauses at human_review before personalize_letter ever runs
 # (see route_after_recommendation) — FULL_PIPELINE is that donor's real path.
 # Everyone below the threshold continues one step further.

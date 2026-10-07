@@ -1,13 +1,68 @@
-"""Fast, deterministic tests for the Address Intelligence agent's node logic —
-mocks the LLM and Address MCP tools entirely, so no network/API calls are made."""
+"""Address Intelligence is deterministic end to end: the decision table in rules.py plus
+two MCP tool calls in check_address. No LLM is mocked because none is involved."""
 
 import json
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from app.agents.address_intelligence import agent as agent_module
-from app.agents.address_intelligence.schemas import AddressResult
+from app.agents.address_intelligence.rules import (
+    CONF_CERTAIN_UNDELIVERABLE,
+    CONF_CLEAN,
+    CONF_MOVED_UNKNOWN,
+    CONF_NO_ADDRESS,
+    CONF_PO_BOX,
+    assess_address,
+)
+
+CLEAN = {"valid": True, "deliverable": True, "standardized_address": "1 Main St, X, TX 75001",
+         "moved": False, "vacant": False, "po_box": False}
+
+
+# --- the decision table ---------------------------------------------------------------
+
+
+def test_clean_address_is_deliverable_and_confident():
+    r = assess_address(CLEAN, None, has_address=True)
+    assert r["deliverable"] and r["confidence"] == CONF_CLEAN
+    assert r["updated_address"] == CLEAN["standardized_address"] and not r["moved"]
+
+
+def test_po_box_is_deliverable_with_a_mild_caution():
+    r = assess_address({**CLEAN, "po_box": True}, None, has_address=True)
+    assert r["deliverable"] and r["confidence"] == CONF_PO_BOX
+    assert any("PO box" in line for line in r["reasoning"])
+
+
+def test_moved_with_a_forwarding_address_carries_the_forwarding_confidence():
+    fwd = {"found": True, "new_address": "9 New St, Denver, CO 80218", "confidence": 0.6}
+    r = assess_address({**CLEAN, "moved": True, "deliverable": False}, fwd, has_address=True)
+    assert r["deliverable"] and r["moved"] and r["confidence"] == 0.6
+    assert r["updated_address"] == "9 New St, Denver, CO 80218"
+
+
+def test_moved_with_no_forwarding_goes_to_a_human():
+    r = assess_address({**CLEAN, "moved": True}, {"found": False, "new_address": None, "confidence": 0.0}, True)
+    assert not r["deliverable"] and r["confidence"] == CONF_MOVED_UNKNOWN and r["updated_address"] is None
+
+
+def test_vacant_is_a_certain_undeliverable_so_the_run_ends_rather_than_pauses():
+    raw = {**CLEAN, "valid": False, "deliverable": False, "vacant": True, "standardized_address": None}
+    r = assess_address(raw, None, has_address=True)
+    assert not r["deliverable"] and r["confidence"] == CONF_CERTAIN_UNDELIVERABLE
+
+
+def test_no_address_on_file_is_unknown_and_pauses():
+    r = assess_address({}, None, has_address=False)
+    assert not r["deliverable"] and r["confidence"] == CONF_NO_ADDRESS
+
+
+def test_forwarding_confidence_is_clamped_to_a_valid_range():
+    fwd = {"found": True, "new_address": "x", "confidence": 7}
+    assert assess_address({**CLEAN, "moved": True}, fwd, True)["confidence"] == 1.0
+
+
+# --- the node -------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -22,134 +77,57 @@ def _mock_audit_log(monkeypatch):
 
 
 class FakeTool:
-    def __init__(self, name, result):
-        self.name = name
+    def __init__(self, result):
         self._result = result
         self.calls: list[dict] = []
 
     async def ainvoke(self, args):
         self.calls.append(args)
-        return self._result
+        return json.dumps(self._result)
 
 
-class FakeStructuredLLM:
-    """Mirrors include_raw=True: the parsed object alongside the AIMessage that
-    carries usage_metadata, which is what token accounting reads."""
-
-    def __init__(self, result: AddressResult):
-        self._result = result
-
-    async def ainvoke(self, messages):
-        raw = AIMessage(
-            content="",
-            usage_metadata={"input_tokens": 90, "output_tokens": 30, "total_tokens": 120},
-        )
-        return {"raw": raw, "parsed": self._result, "parsing_error": None}
+PROFILE = {"address_line1": "410 Willow St", "city": "Denver", "state": "CO", "postal_code": "80203"}
 
 
-class FakeLLM:
-    def __init__(self, structured_result: AddressResult):
-        self._structured_result = structured_result
+async def test_check_address_verifies_then_skips_the_forwarding_lookup_when_not_moved(monkeypatch, _mock_audit_log):
+    verify, lookup = FakeTool(CLEAN), FakeTool({"found": False})
 
-    def with_structured_output(self, schema, include_raw=False):
-        return FakeStructuredLLM(self._structured_result)
+    async def tools():
+        return {"verify_address": verify, "lookup_new_address": lookup}
 
+    monkeypatch.setattr(agent_module, "get_address_tools", tools)
+    result = await agent_module.check_address({"workflow_run_id": "wf", "donor_profile": PROFILE})
 
-async def test_verify_address_calls_tool_with_profile_fields(monkeypatch, _mock_audit_log):
-    verify_result = json.dumps(
-        {
-            "valid": True,
-            "deliverable": True,
-            "standardized_address": "123 Maple St, Springfield, IL 62704",
-            "moved": False,
-            "vacant": False,
-            "po_box": False,
-        }
-    )
-    verify_tool = FakeTool("verify_address", verify_result)
-
-    async def fake_get_address_tools():
-        return {"verify_address": verify_tool}
-
-    monkeypatch.setattr(agent_module, "get_address_tools", fake_get_address_tools)
-
-    state = {
-        "workflow_run_id": "wf-1",
-        "donor_profile": {
-            "address_line1": "123 Maple St",
-            "city": "Springfield",
-            "state": "IL",
-            "postal_code": "62704",
-        },
-    }
-    result = await agent_module.verify_address(state)
-
-    assert result["address_verification"]["deliverable"] is True
-    assert verify_tool.calls == [
-        {"address_line1": "123 Maple St", "city": "Springfield", "state": "IL", "postal_code": "62704"}
-    ]
-    assert _mock_audit_log[0]["step"] == "verify_address"
+    assert result["address_result"]["deliverable"] is True
+    assert verify.calls == [PROFILE] and lookup.calls == []
+    audit = _mock_audit_log[0]
+    assert audit["step"] == "check_address" and "model" not in audit  # no LLM was involved
 
 
-async def test_verify_address_skips_tool_call_when_no_address(monkeypatch, _mock_audit_log):
-    verify_tool = FakeTool("verify_address", "{}")
+async def test_check_address_looks_up_a_forwarding_address_only_when_moved(monkeypatch, _mock_audit_log):
+    moved = {**CLEAN, "moved": True, "deliverable": False}
+    fwd = {"found": True, "new_address": "9 New St", "confidence": 0.6}
+    verify, lookup = FakeTool(moved), FakeTool(fwd)
 
-    async def fake_get_address_tools():
-        return {"verify_address": verify_tool}
+    async def tools():
+        return {"verify_address": verify, "lookup_new_address": lookup}
 
-    monkeypatch.setattr(agent_module, "get_address_tools", fake_get_address_tools)
+    monkeypatch.setattr(agent_module, "get_address_tools", tools)
+    result = await agent_module.check_address({"workflow_run_id": "wf", "donor_profile": PROFILE})
 
-    state = {"workflow_run_id": "wf-1", "donor_profile": {"address_line1": None}}
-    result = await agent_module.verify_address(state)
+    assert lookup.calls == [PROFILE]
+    assert result["address_result"]["confidence"] == 0.6 and result["address_result"]["moved"] is True
+    assert [c["tool_name"] for c in _mock_audit_log[0]["tool_calls"]] == ["verify_address", "lookup_new_address"]
 
+
+async def test_check_address_skips_every_tool_when_there_is_no_address(monkeypatch, _mock_audit_log):
+    verify = FakeTool(CLEAN)
+
+    async def tools():
+        raise AssertionError("no tool should be fetched without an address")
+
+    monkeypatch.setattr(agent_module, "get_address_tools", tools)
+    result = await agent_module.check_address({"workflow_run_id": "wf", "donor_profile": {"address_line1": None}})
+
+    assert result["address_result"]["confidence"] == CONF_NO_ADDRESS and verify.calls == []
     assert result["address_verification"]["deliverable"] is False
-    assert verify_tool.calls == []  # never called — no address to check
-
-
-async def test_assess_and_normalize_calls_forwarding_lookup_when_moved(monkeypatch, _mock_audit_log):
-    forwarding_result = json.dumps({"found": True, "new_address": "1225 Pine St", "confidence": 0.6})
-    forwarding_tool = FakeTool("lookup_new_address", forwarding_result)
-
-    async def fake_get_address_tools():
-        return {"lookup_new_address": forwarding_tool}
-
-    monkeypatch.setattr(agent_module, "get_address_tools", fake_get_address_tools)
-
-    expected = AddressResult(
-        deliverable=True, confidence=0.55, updated_address="1225 Pine St", moved=True, reasoning=["moved"]
-    )
-    monkeypatch.setattr(agent_module, "get_llm", lambda: FakeLLM(expected))
-
-    state = {
-        "workflow_run_id": "wf-1",
-        "donor_profile": {"address_line1": "410 Willow St", "city": "Denver", "state": "CO", "postal_code": "80203"},
-        "address_verification": {"moved": True, "valid": True, "deliverable": False},
-    }
-    result = await agent_module.assess_and_normalize(state)
-
-    assert result["address_result"] == expected.model_dump()
-    assert len(forwarding_tool.calls) == 1
-    assert _mock_audit_log[0]["tool_calls"][0]["tool_name"] == "lookup_new_address"
-
-
-async def test_assess_and_normalize_skips_forwarding_lookup_when_not_moved(monkeypatch, _mock_audit_log):
-    forwarding_tool = FakeTool("lookup_new_address", "{}")
-
-    async def fake_get_address_tools():
-        return {"lookup_new_address": forwarding_tool}
-
-    monkeypatch.setattr(agent_module, "get_address_tools", fake_get_address_tools)
-
-    expected = AddressResult(deliverable=True, confidence=0.97, updated_address="123 Maple St", moved=False)
-    monkeypatch.setattr(agent_module, "get_llm", lambda: FakeLLM(expected))
-
-    state = {
-        "workflow_run_id": "wf-1",
-        "donor_profile": {"address_line1": "123 Maple St"},
-        "address_verification": {"moved": False, "valid": True, "deliverable": True},
-    }
-    result = await agent_module.assess_and_normalize(state)
-
-    assert result["address_result"] == expected.model_dump()
-    assert forwarding_tool.calls == []
-    assert _mock_audit_log[0]["tool_calls"] == []

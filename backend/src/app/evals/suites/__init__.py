@@ -9,7 +9,6 @@ from app.evals.suites import (
     compliance,
     judge_control,
     pdf_generation,
-    recommendation,
     retrieval,
     trajectory,
     verification,
@@ -20,11 +19,10 @@ ALL_SUITES: dict[str, EvalSuite] = {
     suite.name: suite
     for suite in (
         # judge_control runs first: if the judge itself is broken, the
-        # groundedness number from the recommendation suite is meaningless.
+        # groundedness number from the personalization suite is meaningless.
         judge_control.SUITE,
         retrieval.SUITE,
         verification.SUITE,
-        recommendation.SUITE,
         campaign_personalization.SUITE,
         compliance.SUITE,
         pdf_generation.SUITE,

@@ -1,45 +1,23 @@
 import time
 from datetime import date
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.agents.donation_recommendation.prompts import RECOMMEND_ASK_SYSTEM_PROMPT
-from app.agents.donation_recommendation.rfm import build_ask_ladder, enforce_deterministic_fields
+from app.agents.donation_recommendation.rfm import build_ask_ladder, choose_ask
 from app.agents.donation_recommendation.rfm import compute_rfm as compute_rfm_scores
 from app.agents.donation_recommendation.schemas import RecommendationResult
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
-from app.core.llm import ainvoke_structured, get_llm
-from app.core.logging import get_logger
 from app.graph.state import PipelineState
 from app.mcp_clients.crm_client import get_crm_tools, parse_list
-from app.rag.retriever import retrieve
 
 AGENT_NAME = "donation_recommendation"
-RETRIEVE_K = 4
-
-log = get_logger(__name__)
 
 
-def build_retrieval_query(segment: str) -> str:
-    """The RAG query this agent asks, as a function of donor segment.
-
-    Extracted so the evaluation suite can reconstruct exactly which chunks the
-    node was given and score its output against that same context — grading
-    groundedness against a different retrieval than the model actually saw would
-    measure nothing.
-    """
-    return (
-        f"Ask strategy, impact statistics, and success stories to motivate a "
-        f"{segment} donor's next gift to our animal-rescue campaign — cost of "
-        f"care and program outcomes that make the ask concrete."
-    )
-
-
-async def compute_rfm(state: PipelineState) -> dict:
-    """Deterministic: RFM scoring + ask ladder from the donor's giving history.
-    Reuses donation_history already fetched by gather_context; only re-hits the
-    CRM tool if it's somehow absent (e.g. the agent is run standalone). No LLM."""
+async def recommend_ask(state: PipelineState) -> dict:
+    """Deterministic end to end: RFM scoring, the ask ladder, and the rung chosen for the
+    donor's segment. Reuses donation_history already fetched by gather_context and only
+    re-hits the CRM tool if it is absent (e.g. the node is run standalone). No LLM call:
+    the ask is money, so it is code, and the major-gift gate that routes on it reads a
+    value no model ever touched."""
     started = time.monotonic()
     settings = get_settings()
 
@@ -53,92 +31,16 @@ async def compute_rfm(state: PipelineState) -> dict:
         history, today=date.today(), major_gift_threshold=settings.major_gift_ask_threshold
     )
     rfm["ask_ladder"] = build_ask_ladder(rfm)
-
-    await write_audit_log(
-        workflow_run_id=state["workflow_run_id"],
-        agent_name=AGENT_NAME,
-        step="compute_rfm",
-        input_snapshot={"donation_history": history},
-        output=rfm,
-        latency_ms=int((time.monotonic() - started) * 1000),
-    )
-    return {"recommendation_result": rfm}
-
-
-async def recommend_ask(state: PipelineState) -> dict:
-    """LLM + RAG: retrieve campaign knowledge, then choose the recommended ask
-    from the deterministic ladder and justify it, grounded in what was retrieved.
-    The model judges and explains; it never computes or alters the amounts."""
-    started = time.monotonic()
-    settings = get_settings()
-    rfm = state.get("recommendation_result") or {}
-    profile = state.get("donor_profile") or {}
-    segment = rfm.get("segment", "active")
-
-    query = build_retrieval_query(segment)
-    chunks = await retrieve(query, k=RETRIEVE_K)
-    knowledge = "\n\n".join(
-        f"[{c['doc_title']} · {c['doc_type']}]\n{c['chunk_text']}" for c in chunks
-    )
-
-    llm = get_llm()
-    prompt = (
-        f"Donor first name: {profile.get('first_name', '')}\n\n"
-        f"Deterministic RFM summary and ask ladder (copy these fields through unchanged, "
-        f"and pick recommended_ask from ask_ladder):\n{rfm}\n\n"
-        f"Retrieved campaign knowledge:\n{knowledge}\n"
-    )
-    messages = [
-        SystemMessage(content=RECOMMEND_ASK_SYSTEM_PROMPT),
-        HumanMessage(content=prompt),
-    ]
-
-    result, usage = await ainvoke_structured(llm, RecommendationResult, messages)
-    # The prompt asks the model to copy the computed fields through and pick an
-    # ask from the ladder. This is what makes that true rather than hoped for —
-    # the money math is restored from compute_rfm's output regardless of what
-    # came back, so no model output can move a dollar figure or the major-gift
-    # gate that routes on it.
-    raw_output = result.model_dump()
-    recommendation, corrections = enforce_deterministic_fields(rfm, raw_output)
-    if corrections:
-        log.warning(
-            "recommendation.deterministic_fields_corrected",
-            workflow_run_id=state["workflow_run_id"],
-            corrections=corrections,
-        )
-
-    # Corrections ride the audit snapshot rather than pipeline state: a silently
-    # repaired deviation is exactly the kind of thing an explainability trail
-    # exists to surface, but it isn't part of the recommendation itself.
-    #
-    # The pre-enforcement output is recorded alongside it, and only when it
-    # actually differs. The eval suite reads it back to score how often the model
-    # complies *unaided* — scoring the enforced output would measure the guard
-    # rather than the model, since the guard makes compliance true by
-    # construction. When nothing was corrected the enforced output already is
-    # the raw one, so storing it again would just duplicate the payload.
-    audit_output = dict(recommendation)
-    if corrections:
-        audit_output["deterministic_corrections"] = corrections
-        audit_output["model_output_raw"] = raw_output
+    recommendation = RecommendationResult(**rfm, **choose_ask(rfm)).model_dump()
 
     await write_audit_log(
         workflow_run_id=state["workflow_run_id"],
         agent_name=AGENT_NAME,
         step="recommend_ask",
-        input_snapshot={"rfm": rfm, "query": query},
-        output=audit_output,
+        input_snapshot={"donation_history": history},
+        output=recommendation,
         confidence=recommendation["confidence"],
         reasoning="; ".join(recommendation["rationale"]),
-        source_refs=[
-            {"doc_title": c["doc_title"], "doc_type": c["doc_type"], "distance": c["distance"]}
-            for c in chunks
-        ],
-        tool_calls=[{"tool_name": "rag.retrieve", "args": {"query": query, "k": RETRIEVE_K},
-                     "result": [c["doc_title"] for c in chunks]}],
-        model=settings.llm_model,
         latency_ms=int((time.monotonic() - started) * 1000),
-        **usage,
     )
     return {"recommendation_result": recommendation}

@@ -155,9 +155,9 @@ async def synthesize_verdict(state: PipelineState) -> dict:
             corrections=corrections,
         )
 
-    # Same audit convention as recommend_ask: the pre-enforcement output is
-    # recorded only when the guard actually changed something, so the eval
-    # suite can score the model unaided rather than the guard.
+    # Audit convention for guards: the pre-enforcement output is recorded only
+    # when the guard actually changed something, so the eval suite can score the
+    # model unaided rather than the guard.
     audit_output = dict(verdict)
     if corrections:
         audit_output["deterministic_corrections"] = corrections

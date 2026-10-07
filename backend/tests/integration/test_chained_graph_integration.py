@@ -83,9 +83,7 @@ async def test_eligible_clean_donor_completes_with_no_interrupt():
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
-        "verify_address",
-        "assess_and_normalize",
-        "compute_rfm",
+        "check_address",
         "recommend_ask",
         "personalize_letter",
         "gather_disclosures",
@@ -97,10 +95,9 @@ async def test_eligible_clean_donor_completes_with_no_interrupt():
 async def test_low_confidence_address_pauses_then_resumes_cleanly():
     """d-0009 is moved, with a forwarding address found at only moderate
     confidence — that 0.6 is a deterministic fixture value
-    (mcp_servers/address/fixtures.py), not something the LLM invents, since
-    assess_and_normalize's prompt hands it the number directly. That's what
-    makes this donor a reliable pause case regardless of which model is
-    behind LLM_PROVIDER, unlike d-0010 below."""
+    (mcp_servers/address/fixtures.py), and check_address carries it straight
+    through (agents/address_intelligence/rules.py). No model is involved, so
+    this is a reliable pause case on every run."""
     donor_id, workflow_run_id = await _create_run("d-0009")  # moved, uncertain forwarding
     config = {"configurable": {"thread_id": workflow_run_id}}
 
@@ -115,9 +112,7 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
         payload = interrupted["__interrupt__"][0].value
         assert payload["reason"] == "address_confidence_below_threshold"
         assert payload["stage"] == "address"
-        # `moved` itself is an LLM judgment on top of the deterministic
-        # verify_address flag, not guaranteed stable across models — the
-        # confidence gate is the actual, reliable trigger being tested here.
+        # The confidence gate is the trigger being tested here.
         assert payload["under_review"]["confidence"] < 0.80
 
         steps_paused = await _audit_steps(workflow_run_id)
@@ -125,8 +120,7 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
             "fetch_core_data",
             "gather_context",
             "synthesize_verdict",
-            "verify_address",
-            "assess_and_normalize",
+            "check_address",
         ]
 
         decision = {
@@ -150,20 +144,18 @@ async def test_low_confidence_address_pauses_then_resumes_cleanly():
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
-        "verify_address",
-        "assess_and_normalize",
+        "check_address",
         "human_review",
     ]
     assert resumed.get("recommendation_result") is None
 
 
 async def test_confidently_vacant_address_ends_without_pausing_or_mailing():
-    """d-0010 is vacant with no forwarding address to anchor a number to, so
-    (unlike d-0009 above) the model has nothing but an unambiguous "vacant,
-    nothing found" result to reason over — it reports high confidence rather
-    than hedging, which is the correct call, not noise: route_after_address
-    is explicitly designed so a confident-but-undeliverable address ends the
-    run without a human pause, since there's nothing uncertain to review."""
+    """d-0010 is vacant with no forwarding record: a *certain* undeliverable
+    (rules.CONF_CERTAIN_UNDELIVERABLE), not an uncertain one. route_after_address
+    is designed so a confident-but-undeliverable address ends the run without a
+    human pause, since there's nothing uncertain to review. This used to depend
+    on a model reporting high confidence by itself; now it is a rule."""
     donor_id, workflow_run_id = await _create_run("d-0010")  # vacant, no forwarding
 
     async with build_graph() as graph:
@@ -181,8 +173,7 @@ async def test_confidently_vacant_address_ends_without_pausing_or_mailing():
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
-        "verify_address",
-        "assess_and_normalize",
+        "check_address",
     ]
 
 
@@ -212,9 +203,7 @@ async def test_major_gift_ask_pauses_for_recommendation_review_then_resumes():
             "fetch_core_data",
             "gather_context",
             "synthesize_verdict",
-            "verify_address",
-            "assess_and_normalize",
-            "compute_rfm",
+            "check_address",
             "recommend_ask",
         ]
 
@@ -228,7 +217,7 @@ async def test_major_gift_ask_pauses_for_recommendation_review_then_resumes():
 
     assert "__interrupt__" not in resumed
     rec = resumed["recommendation_result"]
-    assert rec["recommended_ask"] == 500.0  # the human's number, not the model's
+    assert rec["recommended_ask"] == 500.0  # the human's number, not the policy's
     assert rec["human_reviewed"] is True
     assert resumed["human_review_decision"]["action"] == "modify"
     # the (now positive) ask continues on into personalization, compliance,
@@ -238,14 +227,17 @@ async def test_major_gift_ask_pauses_for_recommendation_review_then_resumes():
     assert resumed["compliance_result"] is not None
     assert resumed["pdf_result"] is not None
 
-    steps_final = await _audit_steps(workflow_run_id)
+    # What this test is about is that resume did NOT re-run completed nodes. Two kinds of
+    # step legitimately vary and are not part of that claim: reconcile_decision follows
+    # every human decision, and the bounded compliance critique -> revise loop adds
+    # revise_letter + another review_letter_compliance whenever the model disapproves.
+    steps_final = [s for s in await _audit_steps(workflow_run_id) if s not in {"reconcile_decision", "revise_letter"}]
+    steps_final = [s for i, s in enumerate(steps_final) if i == 0 or s != steps_final[i - 1]]
     assert steps_final == [
         "fetch_core_data",
         "gather_context",
         "synthesize_verdict",
-        "verify_address",
-        "assess_and_normalize",
-        "compute_rfm",
+        "check_address",
         "recommend_ask",
         "human_review",
         "personalize_letter",

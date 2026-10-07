@@ -4,10 +4,10 @@ from contextlib import asynccontextmanager
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agents.address_intelligence.agent import assess_and_normalize, verify_address
+from app.agents.address_intelligence.agent import check_address
 from app.agents.campaign_personalization.agent import personalize_letter, revise_letter
 from app.agents.compliance.agent import gather_disclosures, review_letter_compliance
-from app.agents.donation_recommendation.agent import compute_rfm, recommend_ask
+from app.agents.donation_recommendation.agent import recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data, gather_context, synthesize_verdict
 from app.agents.human_review.agent import human_review
 from app.agents.human_review.reconcile import reconcile_decision
@@ -26,7 +26,7 @@ def route_after_verification(state: PipelineState) -> str:
     rest of the pipeline entirely; there's no point address-checking someone
     we're not going to mail."""
     verdict = state.get("verification_result") or {}
-    return "verify_address" if verdict.get("eligible") else END
+    return "check_address" if verdict.get("eligible") else END
 
 
 def route_after_address(state: PipelineState) -> str:
@@ -39,7 +39,7 @@ def route_after_address(state: PipelineState) -> str:
     confidence = result.get("confidence", 0)
     if confidence < settings.confidence_threshold_address_intelligence:
         return "human_review"
-    return "compute_rfm" if result.get("deliverable") else END
+    return "recommend_ask" if result.get("deliverable") else END
 
 
 def route_after_human_review(state: PipelineState) -> str:
@@ -70,23 +70,21 @@ def route_after_human_review(state: PipelineState) -> str:
         rec = state.get("recommendation_result") or {}
         return "personalize_letter" if rec.get("recommended_ask", 0) > 0 else END
     address_result = state.get("address_result") or {}
-    return "compute_rfm" if address_result.get("deliverable") else END
+    return "recommend_ask" if address_result.get("deliverable") else END
 
 
 def route_after_recommendation(state: PipelineState) -> str:
     """The graph's second interrupt trigger: a major-gift-sized ask pauses for
     human approval ("ask amount" is on the spec's human-review trigger list).
 
-    Deliberately keyed on the ask amount alone, which is *deterministic* — it
-    is one of the rungs the ask ladder computed, guaranteed by
-    `enforce_deterministic_fields` snapping the model's pick back onto the
-    ladder rather than by the prompt asking it to comply — not on the model's
-    confidence. Two
+    Deliberately keyed on the ask amount alone, which is *deterministic* — a rung
+    of the ask ladder, chosen by `rfm.choose_ask`; no model is involved in producing
+    it — not on a confidence. Two
     reasons: routing a blocking pause off a non-deterministic float would let
     the same donor take different paths on identical data — unacceptable when
-    the output is a physical letter — and a recommendation's confidence is a
-    prediction about a future gift, not a factual assessment, so it runs
-    honestly low (~0.5) for the thin giving histories that are entirely normal
+    the output is a physical letter — and a recommendation's confidence is the
+    strength of the giving evidence, not a factual assessment, so it runs
+    honestly low (0.5-0.65) for the thin giving histories that are entirely normal
     in this dataset. Low confidence still isn't ignored: it marks the run
     `needs_review` (advisory, non-blocking) in workers/tasks.py, the same way
     Donor Verification's duplicate/suspicious flags do."""
@@ -138,20 +136,18 @@ def _add_verification_unit(graph: StateGraph) -> None:
     graph.add_node("fetch_core_data", traced_node("fetch_core_data", fetch_core_data))
     graph.add_node("gather_context", traced_node("gather_context", gather_context))
     graph.add_node("synthesize_verdict", traced_node("synthesize_verdict", synthesize_verdict))
-    graph.add_node("verify_address", traced_node("verify_address", verify_address))
-    graph.add_node("assess_and_normalize", traced_node("assess_and_normalize", assess_and_normalize))
+    graph.add_node("check_address", traced_node("check_address", check_address))
 
     graph.add_edge(START, "fetch_core_data")
     graph.add_edge("fetch_core_data", "gather_context")
     graph.add_edge("gather_context", "synthesize_verdict")
     graph.add_conditional_edges(
-        "synthesize_verdict", route_after_verification, {"verify_address": "verify_address", END: END}
+        "synthesize_verdict", route_after_verification, {"check_address": "check_address", END: END}
     )
-    graph.add_edge("verify_address", "assess_and_normalize")
     graph.add_conditional_edges(
-        "assess_and_normalize",
+        "check_address",
         route_after_address,
-        {"human_review": "human_review", "compute_rfm": "compute_rfm", END: END},
+        {"human_review": "human_review", "recommend_ask": "recommend_ask", END: END},
     )
 
 
@@ -160,7 +156,6 @@ def _add_fulfillment_unit(graph: StateGraph) -> None:
     deliverable donor into a priced ask, a personalized letter, a compliance
     check, and a print-ready PDF. Everything here consumes the verification
     unit's output; nothing here feeds back into it."""
-    graph.add_node("compute_rfm", traced_node("compute_rfm", compute_rfm))
     graph.add_node("recommend_ask", traced_node("recommend_ask", recommend_ask))
     graph.add_node("personalize_letter", traced_node("personalize_letter", personalize_letter))
     graph.add_node("revise_letter", traced_node("revise_letter", revise_letter))
@@ -170,7 +165,6 @@ def _add_fulfillment_unit(graph: StateGraph) -> None:
     )
     graph.add_node("generate_pdf", traced_node("generate_pdf", generate_pdf))
 
-    graph.add_edge("compute_rfm", "recommend_ask")
     graph.add_conditional_edges(
         "recommend_ask",
         route_after_recommendation,
@@ -201,7 +195,7 @@ def _build_graph() -> StateGraph:
     both units add directly onto the same StateGraph rather than compiling as
     independent subgraph nodes. A real nested subgraph can only be entered at
     its own START, but route_after_human_review resumes into whichever
-    mid-pipeline node the pause happened at (compute_rfm, personalize_letter,
+    mid-pipeline node the pause happened at (recommend_ask, personalize_letter,
     or review_letter_compliance) — resuming into the *middle* of a unit, which
     nested subgraphs don't support. Keeping one flat graph preserves that
     resume behavior exactly; only the code that builds it is split."""
@@ -216,7 +210,7 @@ def _build_graph() -> StateGraph:
         "reconcile_decision",
         route_after_human_review,
         {
-            "compute_rfm": "compute_rfm",
+            "recommend_ask": "recommend_ask",
             "personalize_letter": "personalize_letter",
             "review_letter_compliance": "review_letter_compliance",
             END: END,

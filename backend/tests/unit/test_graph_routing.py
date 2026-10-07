@@ -30,7 +30,7 @@ def test_recommendation_stage_ends_for_zeroed_ask():
 
 def test_address_stage_continues_when_deliverable():
     state = {"address_result": {"deliverable": True}}
-    assert route_after_human_review(state) == "compute_rfm"
+    assert route_after_human_review(state) == "recommend_ask"
 
 
 def test_address_stage_ends_when_not_deliverable():

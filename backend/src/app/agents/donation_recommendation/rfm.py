@@ -1,9 +1,8 @@
-"""Deterministic RFM scoring and ask-ladder construction.
+"""RFM scoring, the ask ladder, and the rung-choosing policy.
 
 Pure functions — no DB, no LLM, no I/O — so the money math is reproducible and
-unit-testable in isolation. The LLM downstream only *chooses* from the ladder
-these functions produce and explains why; it never computes dollar amounts.
-"""
+unit-testable in isolation. No model is involved anywhere in deciding what a donor
+is asked for."""
 
 import statistics
 from datetime import date
@@ -153,63 +152,57 @@ def build_ask_ladder(rfm: dict) -> list[float]:
     return [_round_to(r) for r in rungs]
 
 
-# Fields this module computes and therefore owns. The prompt asks the model to
-# copy them through unchanged, but asking is not enforcing.
-DETERMINISTIC_FIELDS = (
-    "segment",
-    "rfm_score",
-    "recency_days",
-    "frequency",
-    "monetary_total",
-    "anchor_gift",
-    "outlier_gift_excluded",
-    "ask_ladder",
-)
+# Which rung of the ask ladder each segment is asked at. The ladder runs typical ->
+# step-up -> aspirational and is never led with the aspirational figure: donors who
+# have drifted away or have no history are asked gently at the typical rung; everyone
+# else is invited to step up.
+_RUNG_BY_SEGMENT = {
+    SEGMENT_PROSPECT: 0,
+    SEGMENT_LAPSED: 0,
+    SEGMENT_ACTIVE: 1,
+    SEGMENT_LOYAL: 1,
+    SEGMENT_MAJOR: 1,
+}
+
+# Confidence is the strength of the giving evidence behind the ask, not a model's
+# self-assessment: the more gifts there are to anchor on, the surer the figure.
+_CONF_BY_FREQUENCY = {0: 0.50, 1: 0.65, 2: 0.80, 3: 0.80}
+_CONF_FREQUENT = 0.90
+_CONF_OUTLIER_CAP = 0.65  # the donor's true capacity is genuinely uncertain
+_CONF_LAPSED_CAP = 0.75
 
 
-def enforce_deterministic_fields(rfm: dict, recommendation: dict) -> tuple[dict, list[str]]:
-    """Restore the computed fields and snap the ask back onto the ladder.
+def choose_ask(rfm: dict) -> dict:
+    """The recommendation as a policy over the ladder: pick the rung, state why.
 
-    The determinism boundary was previously enforced only by instruction: the
-    schema's `recommended_ask` field carried a *description* saying it must be a
-    ladder value, which Pydantic does not check, and nothing downstream verified
-    it. The eval suite appeared to measure compliance and reported a clean
-    1.000 — but it checked five of the eight fields below, and widening it to
-    all eight dropped `fields_unchanged` to 0.000 on every case, every run: the
-    model had been dropping `recency_days` the whole time, and flipping
-    d-0006's `outlier_gift_excluded` in a fifth of runs. So the measurement was
-    not merely insufficient as a guarantee, it was incomplete as a measurement.
-    The major-gift human-review gate routes on `recommended_ask`, so without
-    this an off-ladder value would let a model-produced float decide whether a
-    human sees the letter at all.
+    This was an LLM call that chose a rung and justified it from retrieved guidelines.
+    The choice follows a fixed segment -> rung rule, and a measurement of the model
+    doing it showed what it added besides cost: it dropped `recency_days` on 15 of 15
+    runs and flipped the outlier flag on 3 of 15 (both then patched by a guard). The
+    judgment the model contributed is in the letter and the compliance review, where
+    it belongs; the ask is money, so it is code."""
+    ladder = rfm["ask_ladder"]
+    segment = rfm["segment"]
+    index = min(_RUNG_BY_SEGMENT.get(segment, 1), len(ladder) - 1)
+    ask = ladder[index]
 
-    Rather than fail the run, deviations are corrected and reported: the ladder
-    is the source of truth, so the nearest rung is always a defensible answer,
-    and the deviation itself is signal worth keeping in the audit trail rather
-    than an error worth discarding a whole pipeline run over.
-    """
-    corrected = dict(recommendation)
-    deviations: list[str] = []
-
-    for field in DETERMINISTIC_FIELDS:
-        if field not in rfm:
-            continue
-        authoritative = rfm[field]
-        if corrected.get(field) != authoritative:
-            deviations.append(
-                f"{field}: model returned {corrected.get(field)!r}, restored {authoritative!r}"
-            )
-            corrected[field] = authoritative
-
-    ladder = rfm.get("ask_ladder") or []
-    ask = corrected.get("recommended_ask")
-    # An empty ladder can't happen via build_ask_ladder (it always returns three
-    # rungs), but snapping against nothing would raise rather than degrade.
-    if ladder and ask not in ladder:
-        nearest = min(ladder, key=lambda rung: abs(rung - (ask or 0.0)))
-        deviations.append(
-            f"recommended_ask: model returned {ask!r}, snapped to nearest rung {nearest!r}"
+    frequency = rfm["frequency"]
+    confidence = _CONF_FREQUENT if frequency >= 4 else _CONF_BY_FREQUENCY.get(frequency, _CONF_FREQUENT)
+    rationale = [
+        f"Segment '{segment}' (RFM score {rfm['rfm_score']}); the ladder is anchored on "
+        f"${rfm['anchor_gift']:.0f} across {frequency} gift(s).",
+        f"Policy: {segment} donors are asked at the {'typical' if index == 0 else 'step-up'} rung "
+        f"of the ladder {ladder}.",
+    ]
+    if rfm.get("outlier_gift_excluded"):
+        confidence = min(confidence, _CONF_OUTLIER_CAP)
+        rationale.append(
+            "An anomalous top gift was excluded from the anchor, so the donor's true capacity "
+            "is uncertain and confidence is capped."
         )
-        corrected["recommended_ask"] = nearest
-
-    return corrected, deviations
+    if segment == SEGMENT_LAPSED:
+        confidence = min(confidence, _CONF_LAPSED_CAP)
+        rationale.append("The donor has not given recently; the ask is gentle and confidence is capped.")
+    if frequency < 2:
+        rationale.append("Thin giving history: the figure rests on a single gift or none.")
+    return {"recommended_ask": ask, "confidence": round(confidence, 3), "rationale": rationale}

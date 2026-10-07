@@ -1,12 +1,9 @@
 """Campaign Personalization eval — prompt-rule compliance and groundedness.
 
-Isolates `personalize_letter` from ask-selection: the recommended ask is a
-deterministic stand-in (a fixed rung off the real ask ladder), not the output
-of `recommend_ask`'s LLM call — that logic already has its own suite
-(recommendation.py). Running it here too would double this suite's LLM cost
-for no new signal.
+The recommended ask comes from the real `recommend_ask` node, which is
+deterministic and free — there is no longer an LLM call to isolate from.
 
-Same two-kind-of-check split as recommendation.py: deterministic scorers pin
+Two kinds of check: deterministic scorers pin
 the rules the prompt states as absolute (tone/segment copied through
 unchanged, cited sources real, the ask amount actually mentioned); the
 LLM-as-judge scorer catches what no assertion can — an invented impact figure
@@ -19,15 +16,14 @@ from app.agents.campaign_personalization.agent import (
     personalize_letter,
 )
 from app.agents.campaign_personalization.rules import tone_for_segment
-from app.agents.donation_recommendation.agent import compute_rfm
+from app.agents.donation_recommendation.agent import recommend_ask
 from app.agents.donor_verification.agent import fetch_core_data
 from app.evals.scorers import FunctionScorer, GroundednessJudge
 from app.evals.suites._common import create_workflow_run, resolve_donor_id
 from app.evals.types import EvalCase, EvalSuite
 from app.rag.retriever import retrieve
 
-# Same donors as recommendation.py's suite, for the same reason: chosen to
-# span distinct RFM segments rather than exercising one path five times.
+# Chosen to span distinct RFM segments rather than exercising one path five times.
 _LABELS: list[tuple[str, str]] = [
     ("d-0001", "active donor, single clean gift"),
     ("d-0006", "active donor with a multi-gift history"),
@@ -52,17 +48,9 @@ async def run_case(case: EvalCase) -> dict:
         "campaign_id": None,
     }
     state.update(await fetch_core_data(state))
-    state.update(await compute_rfm(state))
+    state.update(await recommend_ask(state))
     rfm = state["recommendation_result"]
-
-    # Deterministic stand-in for recommend_ask's output — see module docstring.
-    ladder = rfm["ask_ladder"]
-    recommended_ask = ladder[min(1, len(ladder) - 1)]
-    state["recommendation_result"] = {
-        **rfm,
-        "recommended_ask": recommended_ask,
-        "rationale": [f"Anchored on prior giving of ${rfm['anchor_gift']:.0f}."],
-    }
+    recommended_ask = rfm["recommended_ask"]
 
     segment = rfm["segment"]
     expected_tone = tone_for_segment(segment)

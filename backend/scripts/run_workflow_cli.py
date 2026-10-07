@@ -37,6 +37,20 @@ from app.db.models import AgentAuditLog, Donor, WorkflowRun
 from app.db.session import db_session
 from app.graph.builder import build_graph
 
+# stdout is this script's data channel (callers json.loads it); logs go to stderr. The
+# logging module and structlog were configured at import time against stdout, so
+# re-point them rather than hope no INFO line (httpx logs every request) gets through.
+_RESULT_OUT = sys.stdout
+
+
+def _logs_to_stderr() -> None:
+    import logging
+
+    for handler in logging.root.handlers:
+        if getattr(handler, "stream", None) is sys.stdout:
+            handler.setStream(sys.stderr)
+    sys.stdout = sys.stderr  # PrintLoggerFactory resolves sys.stdout lazily
+
 CRASH_TARGET_NODE = "gather_context"
 
 
@@ -76,8 +90,8 @@ async def audit_steps(workflow_run_id: str) -> list[str]:
 
 def print_result(result: dict) -> None:
     if interrupts := result.get("__interrupt__"):
-        print("PAUSED — awaiting human review:")
-        print(json.dumps(interrupts[0].value, indent=2))
+        print("PAUSED — awaiting human review:", file=_RESULT_OUT)
+        print(json.dumps(interrupts[0].value, indent=2), file=_RESULT_OUT)
         return
 
     aggregate = {}
@@ -97,13 +111,13 @@ def print_result(result: dict) -> None:
         aggregate["pdf_generation"] = result["pdf_result"]
     if result.get("human_review_decision") is not None:
         aggregate["human_review"] = result["human_review_decision"]
-    print(json.dumps(aggregate, indent=2))
+    print(json.dumps(aggregate, indent=2), file=_RESULT_OUT)
 
 
 async def run_full(donor_id: str) -> None:
     donor_uuid = await resolve_donor_uuid(donor_id)
     workflow_run_id = await create_workflow_run(donor_uuid)
-    print(f"workflow_run_id={workflow_run_id}")
+    print(f"workflow_run_id={workflow_run_id}", file=_RESULT_OUT)
 
     async with build_graph() as graph:
         result = await graph.ainvoke(
@@ -257,6 +271,7 @@ def main() -> None:
     p_internal.add_argument("--workflow-run-id", required=True)
 
     args = parser.parse_args()
+    _logs_to_stderr()
 
     if args.command == "run":
         asyncio.run(run_full(args.donor_id))

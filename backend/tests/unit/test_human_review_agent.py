@@ -137,7 +137,7 @@ async def test_audit_row_records_stage_reviewer_and_action(monkeypatch, _mock_au
 
 def test_address_review_continues_into_recommendation_when_deliverable():
     state = {"address_result": {"deliverable": True, "human_reviewed": True}}
-    assert builder_module.route_after_human_review(state) == "compute_rfm"
+    assert builder_module.route_after_human_review(state) == "recommend_ask"
 
 
 def test_address_review_stops_when_address_is_rejected():
@@ -191,7 +191,7 @@ def test_modest_confident_recommendation_continues_to_personalization():
 
 def test_confident_deliverable_address_flows_into_recommendation():
     state = {"address_result": {"deliverable": True, "confidence": 0.95}}
-    assert builder_module.route_after_address(state) == "compute_rfm"
+    assert builder_module.route_after_address(state) == "recommend_ask"
 
 
 def test_confidently_undeliverable_address_ends_without_review():

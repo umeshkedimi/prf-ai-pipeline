@@ -2,10 +2,9 @@ from pydantic import BaseModel, Field
 
 
 class RecommendationResult(BaseModel):
-    """The LLM's structured recommendation. The RFM/ladder fields are carried
-    through from the deterministic computation (the model must not alter them);
-    recommended_ask must be one of the ask_ladder values; rationale and sources
-    ground the choice in retrieved campaign knowledge."""
+    """The recommendation: the RFM summary and ladder from rfm.compute_rfm /
+    build_ask_ladder, plus the rung rfm.choose_ask picked and why. Every field is
+    computed by code; this model is the typed contract the rest of the pipeline reads."""
 
     segment: str
     rfm_score: float
@@ -18,7 +17,7 @@ class RecommendationResult(BaseModel):
         description="True when an anomalous top gift was excluded from the anchor.",
     )
     ask_ladder: list[float]
-    recommended_ask: float = Field(description="Must be one of the ask_ladder amounts.")
-    confidence: float = Field(ge=0.0, le=1.0)
+    recommended_ask: float = Field(description="Always one of the ask_ladder amounts.")
+    confidence: float = Field(ge=0.0, le=1.0, description="Strength of the giving evidence, not a model's opinion.")
     rationale: list[str]
-    sources: list[str] = Field(description="Titles of the campaign-knowledge documents cited.")
+    sources: list[str] = Field(default_factory=list, description="Always empty: no retrieval is involved.")
