@@ -55,6 +55,19 @@ idempotent, so `kubectl delete job prf-migrate` and re-apply is safe.
 Ports are deliberately *not* 8000/3000/16686 — docker-compose binds those, and a
 disposable cluster shouldn't disturb a working stack. Both run at once.
 
+After the first apply, two things the manifests deliberately do not do:
+
+```bash
+# the dev admin (the migrate Job seeds donors and knowledge, not users)
+kubectl -n prf exec deploy/api -- python scripts/seed_users.py
+
+# optional: use a hosted model instead of host Ollama. gpt-4o-mini is defined in
+# litellm/config.yaml, so this is just a name; the proxy's $10 budget cap still applies
+kubectl -n prf set env deploy/celery-worker deploy/celery-agent-worker LLM_MODEL=gpt-4o-mini
+```
+
+The campaign agent runs as its own Deployment, `celery-agent-worker`, consuming only the `agent` queue; the donor worker consumes the default queue. They must be separate: the agent task waits on the donor runs it launches, and on one shared single-slot worker those runs could never start.
+
 Teardown is total: `kind delete cluster --name prf`.
 
 ### Why the `--load-restrictor` flag

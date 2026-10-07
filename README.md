@@ -2,20 +2,32 @@
 
 [![CI](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml)
 
-An **agent harness for fundraising campaigns.** A campaign is a list of 10 to 2,000 donors, and the interesting failures are systemic — one bad import column breaking dozens of addresses, a duplicate pair, a state the org cannot solicit in. A single **campaign agent** prepares such a list for mailing: it profiles the data, fixes what is fixable (with a human's approval), launches donor runs in batches under a budget, reads the outcomes, and reports what is ready, what is held and why. It runs inside a **harness** — permission tiers, hard budgets, approval gates, an audited trajectory — and it drives a **deterministic donor workflow** that turns each donor record into a compliant, print-ready fundraising letter, pausing for a person whenever a rule says the decision is too consequential to automate.
+**An agent harness for fundraising campaigns.** A campaign is a list of 10 to 2,000 donors, and its real problems are systemic: one bad import column breaking dozens of addresses, a duplicate pair, a state the organisation may not solicit in. A single **campaign agent** prepares such a list for mailing. It profiles the data, fixes what is fixable (with a human's approval), launches donor runs in batches under a budget, reads the outcomes, and reports what is ready, what is held and why.
 
-Built as a portfolio-quality reference architecture for Agentic AI / AI Platform Engineering roles. The subject is *where an agent belongs and how to bound it*: one agent where the work is open-ended and checkable, a deterministic workflow with narrow LLM calls where it is not, and a measured account of what the model gets wrong (committed eval baselines, planted-defect campaigns, guards enforced in code).
+It works inside a **harness**: permission tiers, hard budgets, approval gates, and an audited trajectory. It drives a **deterministic donor workflow** that turns each donor record into a compliant, print-ready letter, pausing for a person whenever a rule says the decision is too consequential to automate.
 
-**In one sentence:** `POST /campaigns/{id}/agent/run` → an agent profiles a donor list, asks permission to fix a systemic data defect, launches the donor workflow in batches, notices what failed and why, and returns a report whose numbers come from the database — while every tool it touched was allowlisted, budgeted, tiered, and recorded.
+*PRF = Print Ready Format. The data is synthetic and every external system (CRM, address lookup, compliance registry, print vendor) is mocked behind a real MCP protocol layer. This is a reference architecture, not a deployed service.*
+
+## At a glance
+
+| | |
+|---|---|
+| **One agent, bounded** | Campaign agent over 8 tools in 4 permission tiers. It cannot edit donor data without a human, and cannot reach another campaign |
+| **Donor workflow** | 12 LangGraph nodes, 6 of which call a model. Routing is a function of recorded facts, never of a model's number |
+| **Measured, not asserted** | 8 eval suites against a committed baseline; every agent guard is scored on what the model *requested*, not on what the guard allowed |
+| **Run anywhere** | Docker Compose, or Kubernetes (Kustomize, tested on kind). Local Ollama or a hosted model behind a LiteLLM proxy |
+| **Size** | 269 unit tests, 12 migrations, 4 MCP servers, 13 services |
+
+**In one sentence:** an agent profiles a donor list, asks permission to fix a systemic data defect, launches the donor workflow in batches, notices what failed and why, and returns a report whose numbers come from the database, while every tool it touched was allowlisted, budgeted, tiered, and recorded.
 
 ---
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [Business context](#business-context)
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
-- [Status](#status)
 - [The campaign agent and its harness](#the-campaign-agent-and-its-harness)
 - [The donor workflow](#the-donor-workflow)
 - [The donor workflow stages](#the-donor-workflow-stages)
@@ -26,19 +38,75 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Authentication and authorization](#authentication-and-authorization)
 - [CSV donor ingestion](#csv-donor-ingestion)
 - [Configuration reference](#configuration-reference)
-- [Getting started](#getting-started)
 - [Frontend (review dashboard)](#frontend-review-dashboard)
 - [Running on Kubernetes](#running-on-kubernetes)
 - [Observability](#observability)
 - [LLM routing and cost control](#llm-routing-and-cost-control)
-- [Demos](#demos)
+- [Demo: a whole campaign](#demo-a-whole-campaign)
 - [The seed dataset](#the-seed-dataset)
 - [Tests and CI](#tests-and-ci)
 - [Evaluation framework](#evaluation-framework)
+- [How it was built](#how-it-was-built)
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
 - [Known limitations](#known-limitations)
 
 ---
+
+## Quick start
+
+**Prerequisites:** Docker + Compose, [`uv`](https://docs.astral.sh/uv/), Python 3.12+, an `OPENAI_API_KEY` (RAG embeddings need it at runtime even on a local model: `rag/retriever.py` embeds every query), and one model option below.
+
+| Model option | Setup | Speed |
+|---|---|---|
+| **Hosted, cheapest (recommended to try it)** | in `.env`: `LLM_PROVIDER=litellm`, `LLM_MODEL=gpt-4o-mini` (the proxy holds the key and a $10 budget cap) | ~24 s per donor, tool call under 2 s |
+| **Local Ollama (reference configuration, no cost)** | `brew services start ollama`, `ollama pull qwen2.5:14b`, `ollama pull llama3.1:8b`; the shipped `.env.example` already points here | ~40-60 s per donor |
+
+```bash
+cp .env.example .env                        # add OPENAI_API_KEY; pick a model option above
+docker compose up -d postgres redis
+
+cd backend
+uv sync --extra dev
+uv run alembic upgrade head
+uv run python scripts/seed_db.py            # 12 labelled donors, d-0001..d-0012
+uv run python scripts/seed_users.py         # dev admin: admin@prf.local / changeme123
+uv run python scripts/ingest_knowledge.py   # embed campaign knowledge into pgvector
+cd ..
+
+docker compose up -d --build                # API, both workers, 4 MCP servers, LiteLLM, observability
+curl localhost:8000/api/v1/health           # {"status":"ok"}
+```
+
+Then run the dashboard (`cd frontend && cp .env.example .env && npm install && npm run dev`, http://localhost:5173) or follow [Demo: a whole campaign](#demo-a-whole-campaign) with curl. The `pgdata` volume persists, so seeding is one-time; later sessions are just `docker compose up -d`. Port 9090 is often taken on a dev machine; if `prometheus` will not start, that is why.
+
+### Service ports
+
+| Service | Port | |
+|---|---|---|
+| API | 8000 | `/docs` for interactive OpenAPI |
+| Frontend (Vite dev) | 5173 | |
+| PostgreSQL | 5432 | + pgvector |
+| Redis | 6379 | Celery broker |
+| MCP: CRM / Address / Compliance / Print Vendor | 8100–8103 | streamable-HTTP |
+| LiteLLM proxy | 4000 | OpenAI-compatible; `/v1/models` lists the served aliases |
+| Celery metrics | 9100 | Prometheus scrape target (the donor worker) |
+| Celery agent worker | — | consumes only the `agent` queue; no host port |
+| Jaeger UI | 16686 | traces |
+| Prometheus | 9090 | |
+| Grafana | 3000 | anonymous admin, local-only |
+
+### Common commands
+
+```bash
+cd backend
+uv run pytest                              # unit, offline, ~2.3s
+uv run pytest -m integration               # real stack + live LLM, ~4min
+uv run ruff check .
+
+uv run alembic upgrade head
+uv run python scripts/run_evals.py                     # cheap suites
+uv run python scripts/run_evals.py --include-expensive # + trajectory
+```
 
 ## Business context
 
@@ -55,7 +123,7 @@ Nonprofits (animal rescue orgs, food banks, disaster relief, community welfare N
 }
 ```
 
-Doing this by hand is slow and error-prone in ways that carry real consequence: mailing someone who asked not to be contacted, mailing a deceased donor's household, asking a $25/year donor for $5,000, mailing into a state the org isn't registered to solicit in, or printing a letter that promises an outcome a single gift can't deliver. Each of those is a distinct failure mode, and each maps to an agent below.
+Doing this by hand is slow and error-prone in ways that carry real consequence: mailing someone who asked not to be contacted, mailing a deceased donor's household, asking a $25/year donor for $5,000, mailing into a state the org isn't registered to solicit in, or printing a letter that promises an outcome a single gift can't deliver. Each of those is a distinct failure mode, and each maps to a stage of the donor workflow below.
 
 ## Architecture
 
@@ -167,29 +235,6 @@ These are the load-bearing decisions. Everything else follows from them.
 ```
 
 Every stage directory follows the same shape, so a reviewer who reads one can navigate all of them. Where a stage has deterministic logic, it lives in its own module (`rfm.py`, `rules.py`, `render.py`) rather than inside `agent.py` — that separation is the determinism boundary made visible in the file tree.
-
-## Status
-
-Built **incrementally, phase by phase**, each phase fully working and demoable before the next begins.
-
-| Phase | Scope |
-|---|---|
-| **1** ✅ | Repo foundations, DB schema, Donor Verification agent end-to-end (real Postgres, real CRM MCP server, real LLM call, LangGraph checkpointing, Celery + FastAPI wiring) |
-| **2** ✅ | Address Intelligence agent + Address MCP + first real `interrupt()`-based Human Review node + confidence routing, chained after Donor Verification |
-| **3** ✅ | Donation Recommendation agent (deterministic RFM + ask ladder) + pgvector RAG over campaign knowledge + a second review trigger on major-gift asks |
-| **4** ✅ | Campaign Personalization agent (deterministic tone lookup + RAG-grounded letter draft), chained after Donation Recommendation |
-| **5** ✅ | Compliance agent (deterministic state-registration/disclosure lookup + RAG-grounded letter-risk review) + Compliance MCP; a third review trigger on unregistered-state solicitation |
-| **6** ✅ | PDF Generation agent (deterministic letter layout, QR code, Code128 barcode) + Print Vendor MCP — no LLM call, purely mechanical assembly and a mocked vendor order |
-| **7** ✅ | Review queue (`GET /workflow/reviews` with donor/campaign names and pagination) + per-run decision history (`review_history`, derived from the audit trail) + routing a disapproved compliance review to `needs_review` + `graph/builder.py` split into named verification/fulfillment units |
-| **8** ✅ | **8a** React review dashboard (`frontend/`). **8b** OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning API, Celery, and every agent node. **8c** CI (`.github/workflows/ci.yml`) — lint + offline unit suite on every push/PR |
-| **9** ✅ | **9a** Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** CSV donor ingestion (`POST /donors/ingest`, admin-only, upserts by `external_id`) staged — never auto-runs — plus `GET /donors/unrun` and `POST /workflow/run/batch` to explicitly trigger runs on staged donors |
-| **Hardening** ✅ | Post-Phase-9 work on making the agents safer to operate: a bounded compliance critique → revise loop (`revise_letter`); `reconcile_decision` (reviewer notes → letter guidance); a letter Compliance still disapproves is **held** from the print vendor and a human can release or discard it (`POST /workflow/{id}/release`); do-not-contact/suppression **enforced in code** (`enforce_eligibility`) and re-checked when a paused run resumes; atomic claims and stage binding on `/review` for concurrent reviewers; recovery for runs and releases whose worker died (`heartbeat_at`, migration 0009) |
-| **10** ✅ | **The campaign agent.** `campaign_donors` membership + set-level tools (profile, duplicate pairs, failure clusters); `app/harness/` (tool gateway, four permission tiers, budgets, durable `agent_runs`/`agent_steps`, atomic approval claim); the LangGraph agent loop on its own Celery queue; stalled-agent recovery (migration 0012); dashboard trajectory + approval UI; a `campaign_agent` eval suite scored on planted-defect campaigns |
-| **11** ✅ | **Deterministic donor workflow.** Address assessment and ask selection were LLM calls whose prompts were decision tables; they are now rules (`address_intelligence/rules.py`, `donation_recommendation/rfm.py:choose_ask`) and each merged with its deterministic sibling node — 14 nodes → 12, 8 LLM-calling nodes → 6. The `recommendation` eval suite and the guard that existed only to repair its model (`enforce_deterministic_fields`) were retired with them |
-
-**Evaluation framework** ✅ — built early, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
-
-All eleven phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
 
 ## The campaign agent and its harness
 
@@ -545,138 +590,43 @@ Calibrating these was not intuition — see [why calibration is measured](#evalu
 
 **Auth (Phase 9a):** `JWT_SECRET_KEY` (dev-only default, rotate before any real deployment), `JWT_ALGORITHM` (`HS256`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (`480` — a workday).
 
-## Getting started
-
-### Prerequisites
-
-- Docker + Docker Compose
-- [`uv`](https://docs.astral.sh/uv/)
-- Python 3.12+
-- **A model provider**, either:
-  - **[Ollama](https://ollama.com) (reference configuration — no API key, no per-call cost).** This is what `.env.example` ships with and what the committed eval baseline was recorded against:
-    ```bash
-    brew services start ollama          # persists across reboots
-    ollama pull qwen2.5:14b             # pipeline model
-    ollama pull llama3.1:8b             # eval judge model
-    ```
-  - **or** a hosted provider — set `LLM_PROVIDER`/`LLM_MODEL` to `google_genai` or `anthropic` and supply the matching key.
-- **An `OPENAI_API_KEY` for RAG embeddings.** Required even on Ollama: every retrieval embeds the query at runtime (`rag/retriever.py`), so this is not just an ingest-time dependency. Anthropic has no embeddings API; point `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` elsewhere if you prefer.
-
-### Setup
-
-```bash
-cp .env.example .env        # add OPENAI_API_KEY (+ a model key if not using Ollama)
-docker compose up -d postgres redis
-
-cd backend
-uv sync --extra dev
-uv run alembic upgrade head
-uv run python scripts/seed_db.py            # 12 labeled donors, d-0001..d-0012
-uv run python scripts/seed_users.py         # dev-only admin: admin@prf.local / changeme123
-uv run python scripts/ingest_knowledge.py   # embed campaign knowledge into pgvector
-cd ..
-
-docker compose up -d --build \
-  mcp-crm mcp-address mcp-compliance mcp-print-vendor celery-worker api
-docker compose up -d jaeger prometheus grafana   # optional: observability
-
-curl localhost:8000/api/v1/health            # {"status":"ok"}
-```
-
-The `pgdata` volume persists, so seeding and ingestion are one-time — subsequent sessions are just `docker compose up -d`. `ingest_knowledge.py` is idempotent; re-run it after editing anything in `backend/knowledge/`.
-
-### Service ports
-
-| Service | Port | |
-|---|---|---|
-| API | 8000 | `/docs` for interactive OpenAPI |
-| Frontend (Vite dev) | 5173 | |
-| PostgreSQL | 5432 | + pgvector |
-| Redis | 6379 | Celery broker |
-| MCP: CRM / Address / Compliance / Print Vendor | 8100–8103 | streamable-HTTP |
-| LiteLLM proxy | 4000 | OpenAI-compatible; `/v1/models` lists the served aliases |
-| Celery metrics | 9100 | Prometheus scrape target (the donor worker) |
-| Celery agent worker | — | consumes only the `agent` queue; no host port |
-| Jaeger UI | 16686 | traces |
-| Prometheus | 9090 | |
-| Grafana | 3000 | anonymous admin, local-only |
-
-### Common commands
-
-```bash
-cd backend
-uv run pytest                              # unit, offline, ~2.3s
-uv run pytest -m integration               # real stack + live LLM, ~4min
-uv run ruff check .
-
-uv run alembic upgrade head
-uv run python scripts/run_evals.py                     # cheap suites
-uv run python scripts/run_evals.py --include-expensive # + trajectory
-```
-
 ## Frontend (review dashboard)
 
-A minimal Vite + React + TypeScript app consuming the review-queue API — no framework beyond React itself, no client-side router (the whole app is a login screen, a queue view, a run-detail view, and a Donors view, toggled by component state), no CSS library, no state management beyond `useState`. It's a UI for reviewing paused/flagged runs and staging/triggering donor runs, not a general admin panel.
+A small Vite + React + TypeScript app: no router (views are toggled by component state in `App.tsx`), no CSS library, no state library beyond `useState`. Tabs: **Review queue**, **All runs**, **Donors** (CSV upload + a checkbox list of never-run donors), and **Campaigns**.
 
-The **Donors** tab (`DonorImport.tsx`, Phase 9b) is a CSV upload form (admin-only) plus a checkbox list of never-run donors with a "Start N runs" button — open to both roles, since triggering a run is a normal reviewer action even though uploading the donor dataset isn't.
-
-The **Campaigns** tab (Phase 10: `Campaigns.tsx`, `CampaignDetail.tsx`, `AgentRunView.tsx`) is where the campaign agent is run and watched: create a campaign, upload a donor CSV *into* it (donors stay `staged`), then "Prepare campaign for mailing" with a step and donor-run budget. The agent-run view polls while the run is live and shows three budget bars, the **trajectory** (every tool call with its permission tier, outcome and result, and the human decisions interleaved), a prominent **approval card** when the agent is paused on an irreversible call (it shows the exact donor ids, the agent's reasoning, and Approve / Deny), and the final report — whose counts come from the database, with the model's own summary labelled as its words.
-
-`Login.tsx` gates the whole app: `App.tsx` checks for a stored token via `GET /auth/me` on load and renders the login form until that succeeds. The token lives in `localStorage`, is attached as a `Bearer` header on every request (`api.ts`), and any `401` response clears it — an expired session drops back to login on the next action rather than failing silently.
+**Campaigns** is where the agent is run and watched: create a campaign, upload a donor CSV *into* it (donors stay `staged`), then "Prepare campaign for mailing" with a step and donor-run budget. The agent-run view polls while the run is live and shows three budget bars; the **trajectory** (every tool call with its permission tier, outcome and result, with human decisions interleaved); a prominent **approval card** when the agent is paused on an irreversible call (the exact donor ids, the agent's reasoning, Approve / Deny); and the final report, whose counts come from the database, with the model's own summary labelled as its words and any unfinished work called out.
 
 ```bash
 cd frontend
 cp .env.example .env   # VITE_API_BASE_URL, defaults to localhost:8000/api/v1
-npm install
-npm run dev            # http://localhost:5173
+npm install && npm run dev
 ```
 
-The API's CORS middleware allow-lists `http://localhost:5173` by default (`CORS_ALLOWED_ORIGINS` in the root `.env`) — no extra setup for local dev.
+CORS allow-lists `http://localhost:5173` by default (`CORS_ALLOWED_ORIGINS`). A submitted decision resumes the graph asynchronously through Celery, so the UI offers an explicit Refresh rather than faking a synchronous result. Auth: `Login.tsx` gates the app, the token lives in `localStorage` and rides every request as a Bearer header, and any `401` clears it.
 
-**What it does:** starts a run via `POST /workflow/run`, so a full loop can be driven from the browser rather than curl; lists `GET /workflow/reviews` with donor names and CRM codes plus pagination; a separate **All runs** tab lists `GET /workflow/runs` — every status, not just what's awaiting action, newest first, with a status filter — since a `completed` run by definition never enters the review queue and otherwise had no listing at all, only "paste its id if you already know it"; opens a run via `GET /workflow/{id}` (and its full audit trail on demand via `?verbose=true`), from either list or by pasting a run ID; submits decisions via `POST /workflow/{id}/review`, with the form's fields (`updated_address` / `updated_ask_amount`) conditional on which of the three stages paused; renders per-stage result cards (confidence, reasoning, or `flagged_issues` when a compliance review disapproved) with raw JSON behind a toggle; links to the generated PDF via `GET /workflow/{id}/pdf`; shows a release/discard form (reason required) for a held letter via `POST /workflow/{id}/release`, and a Retry button when a release has stalled; sends the review `stage` with every decision and surfaces a `409` (another reviewer already decided) instead of swallowing it; and shows `review_history` — every past decision on that run, not just the one that last resolved it.
+**Keep in sync:** `src/api.ts` and `src/types.ts` mirror `backend/src/app/schemas/` (`workflow.py`, `campaigns.py`, `agent.py`). Two things that have bitten before: `ReviewDecisionCreate.stage` is required (the API refuses a decision for a stage the run is not at), and `GET /workflow/{id}/pdf` needs a Bearer token, so the PDF link is an authenticated `fetch` into a blob URL, not a plain `<a href>`.
 
-A submitted decision resumes the graph asynchronously via Celery, so the UI offers an explicit Refresh rather than faking a synchronous result.
-
-`src/api.ts` and `src/types.ts` mirror `backend/src/app/schemas/workflow.py` directly — if that schema changes, these are the first place to check.
+> Honest gap: this environment had no browser tool for the campaign views. They are verified by `tsc`, `vite build`, `oxlint`, and by driving the exact API calls they make. The earlier tabs were checked by hand in a real browser.
 
 ## Running on Kubernetes
 
-`docker-compose.yml` remains the primary way to run this. The same 13 services
-also deploy to Kubernetes via a Kustomize base in [`k8s/`](k8s/README.md),
-verified end-to-end on a local [kind](https://kind.sigs.k8s.io/) cluster.
+The same stack deploys to Kubernetes through a Kustomize base in [`k8s/`](k8s/README.md): cloud-neutral base, `overlays/kind/` for everything local. Postgres is a StatefulSet; migrations are a Job (not an initContainer, which would run Alembic once per replica); the agent control plane runs as its own Deployment (`celery-agent-worker`, queue `agent`) because on a shared single-slot worker the agent task would hold the only slot while waiting for the donor runs it launched.
 
-The base is **cloud-neutral** — it names neither kind nor a cloud. Everything
-environment-specific lives in `overlays/kind/`: `imagePullPolicy: Never` for
-kind's separate containerd, NodePorts standing in for the LoadBalancer kind has
-no cloud provider to satisfy, and the host address for Ollama. An
-`overlays/eks/` would swap those for ECR references, an ALB Ingress, a `gp3`
-StorageClass, and an IRSA-annotated ServiceAccount without touching the base.
+**Current state of the local cluster:** a kind cluster named `prf` is up with **14 pods Running** (API, donor worker, agent worker, LiteLLM, four MCP servers, Postgres, Redis, Jaeger, Prometheus, Grafana, and the completed migrate Job). A 24-donor campaign has been run through it end to end.
 
-A few decisions carry the same reasoning as the rest of this project. Postgres
-is a StatefulSet because a Deployment's rolling update would start a second pod
-against the same volume. Migrations run as a **Job**, not an initContainer —
-an initContainer runs once per *pod*, so scaling the API to 3 replicas would run
-Alembic three times concurrently. `celery-worker` uses `Recreate` for the same
-single-writer reason that pinned `--concurrency=1` in compose. ConfigMaps are
-*generated* from `litellm/config.yaml` and `observability/` rather than copied,
-so the cluster and compose read one source of truth.
+```bash
+kind create cluster --config k8s/kind-cluster.yaml
+docker build -t prf-backend:local ./backend && kind load docker-image prf-backend:local --name prf
+kubectl kustomize --load-restrictor LoadRestrictionsNone k8s/overlays/kind | kubectl apply -f -
+kubectl -n prf create secret generic prf-api-keys --from-env-file=<keys file>   # never committed
+kubectl -n prf exec deploy/api -- python scripts/seed_users.py                  # dev admin
+# API on http://localhost:18000, Grafana 13000, Jaeger 16687, Prometheus 19090
+```
 
-**Three bugs the cluster found that compose structurally could not**, which is
-the honest argument for having done this at all:
+Switch the cluster's model without touching manifests (the proxy serves it by name):
+`kubectl -n prf set env deploy/celery-worker deploy/celery-agent-worker LLM_MODEL=gpt-4o-mini`. The live cluster is currently set this way.
 
-1. **LiteLLM was OOMKilled six times** on a 1Gi limit. Compose sets no memory
-   limit, so the process simply took what it needed and its real footprint had
-   never been observed. Declaring limits is what surfaced it.
-2. **A liveness probe restarted a healthy worker.** `exec` probes run without a
-   shell, so `celery@$(hostname)` was passed as a literal and the probe queried
-   a node that cannot exist.
-3. **The image shipped `ingest_knowledge.py` without its corpus** — invisible
-   under compose, where ingest was always run from the host.
-
-One limitation stated rather than hidden: the shared `prf-storage` PVC is
-`ReadWriteOnce`, which works on single-node kind but would strand a pod on
-multi-node EKS. The real fix is S3 with presigned URLs — an application change,
-not a manifest change, so it is documented instead of quietly patched.
+**What the cluster found that Compose could not:** LiteLLM was OOMKilled six times at a 1Gi limit (Compose sets no limit, so its real footprint was never observed); a liveness probe killed a healthy worker because `exec` probes run without a shell; the image shipped the ingest script without its corpus; and the proxy pod had never been given the OpenAI key its hosted model needs. Stated limitation: the shared `prf-storage` PVC is `ReadWriteOnce`, fine on one node, wrong on a multi-node cluster; the real fix is object storage with presigned URLs, an application change, so it is documented, not patched.
 
 ## Observability
 
@@ -743,18 +693,38 @@ Measured on the kind cluster with the same planted-defect campaign: the full run
 
 The same run showed that **the model is a parameter of the result, not a detail**. With `gpt-4o-mini` as the compliance reviewer, 19 of 22 letters were disapproved even after the two revise attempts, so 22 donors ended `held` and none `ready` — the system behaved correctly (nothing was mailed, every donor was accounted for, the report said so), but a stricter judge produced a very different campaign. The committed eval baselines were measured on `qwen2.5:14b`; they do not transfer, and a sweep on this model would need its own baseline. The agent also used 150k tokens (its whole budget) cycling between waiting, grouping failures, and proposing holds.
 
-## Demos
+## Demo: a whole campaign
 
-Every command below requires a session token — log in once and export it (all `/workflow/*` routes require it since Phase 9a):
+A synthetic 24-donor campaign with planted defects (4 malformed ZIPs, a duplicate pair, 2 unregistered-state donors, 1 opted-out donor) and a ground-truth manifest of what the agent should find.
 
 ```bash
-curl -X POST localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@prf.local", "password": "changeme123"}'
-# -> {"access_token": "...", "token_type": "bearer"}
+cd backend
+uv run python scripts/make_campaign_csv.py --out /tmp/spring.csv --n 24   # writes spring.csv + spring.manifest.json
+B=localhost:8000/api/v1
+TOKEN=$(curl -s -X POST $B/auth/login -H 'content-type: application/json' \
+  -d '{"email":"admin@prf.local","password":"changeme123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+H="Authorization: Bearer $TOKEN"
 
-export TOKEN=<paste access_token above>
+CID=$(curl -s -X POST $B/campaigns -H "$H" -H 'content-type: application/json' -d '{"name":"Spring appeal"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -X POST "$B/donors/ingest?campaign_id=$CID" -H "$H" -F file=@/tmp/spring.csv      # donors are staged, nothing runs
+AID=$(curl -s -X POST $B/campaigns/$CID/agent/run -H "$H" -H 'content-type: application/json' \
+  -d '{"max_steps": 50, "max_runs": 30}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+curl -s $B/agent-runs/$AID -H "$H"        # poll: status, budget usage, steps, pending_approval
 ```
+
+What happens, in order:
+
+1. The agent calls `profile_campaign` and `find_duplicate_pairs`, then requests `pad_postal_codes` for the donors whose ZIP lost its leading zero. The run moves to `awaiting_approval`. Check the ids in `pending_approval.args` against the profile, then:
+   `curl -s -X POST $B/agent-runs/$AID/approval -H "$H" -H 'content-type: application/json' -d '{"tool":"pad_postal_codes","approve":true,"notes":"ids match the profile"}'`
+   (`409` if nothing is pending, the tool does not match, or another reviewer answered first. The reviewer recorded is the logged-in user, never a field in the body.)
+2. It launches donors in batches (each charged to the donor-run budget), waits for the runs, groups failures by cause, and proposes holds. Unregistered-state donors pause in the review queue by design.
+3. The run ends `completed` (nothing left) or `completed_with_gaps` (donors still in flight or unaddressed). `final_report` holds counts from the database, the actions taken, the human decisions, anything the duplicate guard held, and an `unresolved` section.
+
+Measured on the kind cluster with `gpt-4o-mini`: **633 seconds** end to end for the agent plus all 24 donor runs. The same campaign took ~16 minutes on the local model.
+
+<details>
+<summary>Donor-level demos (one donor at a time, no agent): address pause, major gift, compliance, PDF, review queue, crash/resume</summary>
 
 ### The full human-in-the-loop loop (address stage)
 
@@ -909,6 +879,8 @@ uv run python scripts/run_workflow_cli.py review --workflow-run-id <id> --action
     --updated-ask-amount 500
 ```
 
+</details>
+
 ## The seed dataset
 
 `backend/scripts/seed_db.py` seeds 12 donors covering every branch through all six pipeline agents. Running all twelve through the real stack gives exactly:
@@ -949,60 +921,57 @@ Unit tests mock the LLM, the MCP tools, and the RAG retriever, so they run offli
 
 ## Evaluation framework
 
-Tests answer *"does the code do what I wrote?"* — deterministic, binary, permanent. They cannot answer *"does the system make good decisions?"* The unit test for `personalize_letter` mocks the LLM entirely; it proves retrieved text reaches the prompt and nothing about whether the letter is sensible.
-
-Evals close that gap. They are **not pass/fail gates** — they produce scores tracked against a committed baseline, so "did that prompt change help?" is a diff rather than a memory exercise.
+Tests answer *"does the code do what I wrote?"* They cannot answer *"does the system make good decisions?"* Evals close that gap. They are **not pass/fail gates**: they produce scores tracked against a committed baseline, so "did that change help?" is a diff, not a memory exercise.
 
 ```bash
-uv run python scripts/run_evals.py                          # default (cheap) suites
-uv run python scripts/run_evals.py --suite retrieval        # one suite
+cd backend
+uv run python scripts/run_evals.py                          # cheap suites
+uv run python scripts/run_evals.py --suite campaign_agent   # one suite
 uv run python scripts/run_evals.py --case d-0009            # one case, repeatable
-uv run python scripts/run_evals.py --include-expensive      # add end-to-end trajectory
-uv run python scripts/run_evals.py --runs 5 --set-baseline  # record a new baseline
+uv run python scripts/run_evals.py --include-expensive      # + trajectory, campaign_agent
+uv run python scripts/run_evals.py --runs 5 --set-baseline  # record a baseline (refuses if any run errored)
 ```
 
-Every case runs N times (default 3), because `get_llm()` deliberately doesn't pin temperature — a single pass reports noise as signal. Scores are averaged and any case whose score moved between identical runs is flagged as flaky.
+Every case runs N times (default 3), because `get_llm()` does not pin temperature and a single pass reports noise as signal. Scores are averaged, and any case whose score moved between identical runs is flagged flaky.
 
 ### The suites
 
 | suite | what it measures | cases |
 |---|---|---|
-| `judge_control` | **whether the LLM judge itself still works** — synthetic cases with known verdicts | 5 |
-| `retrieval` | recall@1/@3/@5 and MRR over query→document pairs, scored *apart from generation* | 10 |
-| `verification` | eligibility classification + per-class recall + confidence calibration | 11 |
-| `campaign_personalization` | letter-draft rule compliance (tone/segment fidelity, ask reference) + groundedness | 5 |
-| `compliance` | disclosure-lookup correctness (deterministic) + letter-content risk review | 4 |
-| `pdf_generation` | deterministic PDF assembly + vendor order correctness — no LLM call, so no judge scorer | 3 |
+| `judge_control` | whether the LLM judge itself still works: synthetic cases with known verdicts | 5 |
+| `retrieval` | recall@k and MRR over query to document pairs, scored apart from generation | 10 |
+| `verification` | eligibility classification, per-class recall, confidence calibration | 11 |
+| `campaign_personalization` | letter rule compliance (tone, ask reference) and RAG groundedness | 5 |
+| `compliance` | disclosure-lookup correctness and the letter-risk review | 4 |
+| `pdf_generation` | deterministic PDF assembly and vendor order correctness (no LLM) | 3 |
 | `trajectory` | end-to-end routing: terminal state and node path (expensive, opt-in) | 12 |
-| `campaign_agent` | the campaign agent's trajectory on planted-defect campaigns: ZIP-fix F1, invented ids, duplicate handling, false alarms, budget, approval invariant (expensive, opt-in) | 4 |
+| `campaign_agent` | the campaign agent on planted-defect campaigns, scored on what the model *requested* (expensive, opt-in) | 4 |
 
 ### Committed baseline
 
-`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case. From `backend/evals/results/baseline.json`, recorded on a clean tree (each suite's own SHA is in the file — see below):
+`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case, from `backend/evals/results/baseline.json`. Provenance is **per suite**: each entry carries its own `git_sha`, because the file is merged suite by suite and a single top-level SHA would credit untouched suites to a commit that never measured them. A sweep on a dirty tree records `-dirty`.
 
-| suite | headline metrics | duration |
-|---|---|---|
-| `judge_control` | `judge_verdict_correct` **1.000** | 6s |
-| `retrieval` | `recall@1` 0.900 · `recall@3` **1.000** · `recall@5` **1.000** · `mrr` 0.950 | 10s |
-| `verification` | `accuracy` **1.000** · `recall_ineligible` **1.000** · `expected_calibration_error` 0.104 | 507s |
-| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `references_recommended_ask` **1.000** · `groundedness` **1.000** · `sources_valid` 0.533 | 249s |
-| `compliance` | all four scorers **1.000** | 36s |
-| `pdf_generation` | all five deterministic scorers **1.000** | 1s |
-| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 383s |
-| `campaign_agent` | `approval_invariant` **1.000** · `duplicates_handled_effective` **1.000** · `no_false_alarms` **1.000** · `zip_fix_f1` 0.833 · `duplicates_handled` 0.708 · `no_invented_ids` 0.833 · `completed_within_budget` 0.917 | 808s |
+| suite | headline metrics | duration | measured at |
+|---|---|---|---|
+| `judge_control` | `judge_verdict_correct` **1.000** | 6s | `c8ba63c` |
+| `retrieval` | `recall@1` 0.900 · `recall@3` **1.000** · `recall@5` **1.000** · `mrr` 0.950 | 10s | `c8ba63c` |
+| `verification` | `accuracy` **1.000** · `recall_ineligible` **1.000** · `expected_calibration_error` 0.104 | 507s | `c8ba63c` |
+| `campaign_personalization` | `tone_and_segment_unchanged` **1.000** · `references_recommended_ask` **1.000** · `groundedness` **1.000** · `sources_valid` 0.533 | 249s | `d57642e` |
+| `compliance` | all four scorers **1.000** | 36s | `c8ba63c` |
+| `pdf_generation` | all five deterministic scorers **1.000** | 1s | `c8ba63c` |
+| `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 383s | `d57642e` |
+| `campaign_agent` | `approval_invariant` **1.000** · `duplicates_handled_effective` 0.917 · `no_false_alarms` **1.000** · `zip_fix_f1` **1.000** · `zip_fix_f1_effective` **1.000** · `duplicates_handled` 0.583 · `no_invented_ids` 0.833 · `completed_within_budget` **1.000** | 964s | `0d1239c` |
 
-Provenance is **per suite**: each entry in `baseline.json` carries its own `git_sha` and `measured_at`, because the file is merged suite by suite and a single top-level SHA would credit untouched suites to a commit that never measured them. (The entries that predate this were backfilled from the recorded history: seven at `c8ba63c`, `trajectory` at `5e32501`. `trajectory` has still not been re-swept since the determinism guard — two attempts were refused over an execution error, and forcing it would have recorded a fabricated number.)
+These baselines were measured on the local model. A different model is a different result: with `gpt-4o-mini` as the compliance reviewer, 19 of 22 letters were disapproved on the cluster run, so the baselines do not transfer and a sweep on another model needs its own.
 
-Every row above was recorded from a sweep with zero execution errors — that is a precondition for promotion, not a coincidence: `--set-baseline` refuses a run that had any. Reading the misses honestly:
+Reading the numbers honestly:
 
-- **`retrieval` `recall@1` 0.900** — one case (`adoption-story`) fails *deliberately*: an aggregate-stats chunk outranks the narrative story, which is a defensible tie. Tuning it to pass would strip the suite of discriminating power.
-- **`trajectory` is now clean at 1.000**, having sat at 0.917 for several sweeps. The failing case (d-0010) scored 0.000 *identically* across every run — and that consistency is what identified it. Flaky failures move between runs; a deterministic one means the suite and the system genuinely disagree. Here the system was right: `route_after_address` is documented to end a confident-but-undeliverable address without pausing, and d-0010 returns a flat confidence of 1.0, so there was no uncertainty for a human to adjudicate. The *expectation* was stale, left over from a pipeline model that scored the same donor differently. Corrected in `5e32501` — and the case now covers the third branch of that router, which nothing else exercised.
-- **`trajectory` has resisted two re-sweeps since, and the runner was right to refuse both.** Each attempt produced exactly one execution error out of 36 case-runs — a different donor every time (d-0008, then d-0007, then d-0011), which is the signature of transient local-inference flakiness rather than a broken fixture. Two shapes, both documented below: an empty tool result hitting `json.loads('')` inside `gather_context`'s loop, and `address_intelligence` emitting `confidence: 3` against a schema bounded at 1.0. Both already sit behind bounded retries (3 attempts); these exhausted them. The scores those runs reported — 0.972 on all three metrics — are arithmetically just 35/36, so the *routing* was correct in every run that completed. Promoting that 0.972 would have recorded a model-loading hiccup as a routing regression, which is exactly the error `--set-baseline`'s refusal exists to prevent. A metric is only worth keeping if a bad number means the system is wrong.
-- **The `recommendation` suite was retired, and that is the strongest thing its history says.** It was built to measure whether a model honoured "copy these fields through unchanged and pick a ladder rung". Widening its scorer from five fields to all eight dropped `fields_unchanged` from 1.000 to 0.000 on every case, every run — the model had been dropping `recency_days` the whole time and flipping d-0006's outlier flag in a fifth of runs — and a guard was added to repair it. Then the harder question: why is a model producing these at all? The answer was that the ask follows a fixed rule and is money, so the LLM call was removed rather than guarded. A suite that scores compliance of a step that no longer has a model would read 1.000 by construction; the rule is covered by unit tests (`test_ask_policy.py`) and the routing by `trajectory`.
-- **Re-baselining after the redesign.** Removing two LLM nodes changes what `trajectory` and `campaign_personalization` run through, so both were re-swept on a clean tree and carry their own `git_sha`. The campaign-personalization suite now feeds its letters the real `recommend_ask` instead of a stand-in, because the node is deterministic and free.
-- **`campaign_agent`: the harness holds, the model is the weak link — and the numbers show which is which.** The invariants are flat 1.000 (`approval_invariant`: an irreversible tool only ever ran right after an approving human decision; `duplicates_handled_effective`: the duplicate guard held). The model's own judgment is not: `duplicates_handled` 0.708 is the gap between what it *asked* to launch and what the guard allowed; `zip_fix_f1` 0.833 is flaky (`[0.0, 1.0, 1.0]` on identical runs — sometimes it simply doesn't fix the planted defect); `no_invented_ids` 0.833 is the model still making up ids on some runs, which the precheck then refuses. The first sweep, before the fixes the live runs forced, scored `zip_fix_f1` 0.25 and a false alarm on the clean control — those two moved because of harness changes (ids in the profile, a conditional prompt step, a precheck), not a model change. Kept as is rather than tuned: it is the honest picture of a 14B local model operating under a harness.
-
-Calibration is measured but deliberately not over-claimed: at n=33 the reliability table is enough to demonstrate the mechanism and catch gross miscalibration, not enough to set production thresholds from. It currently shows the model *under*-confident — stated 0.736 against observed 1.000 in the 0.7–0.8 bucket — which is the safe direction for a pipeline that routes on these numbers.
+- **`retrieval` `recall@1` 0.900.** One case (`adoption-story`) fails *deliberately*: an aggregate-stats chunk outranks the narrative story, a defensible tie. Tuning it to pass would strip the suite of discriminating power.
+- **`campaign_personalization` `sources_valid` 0.533.** The model cites source titles that were not among the retrieved chunks. Left as measured.
+- **`trajectory` is 1.000 on all 12 donors**, in 383s (it was 1098s before two LLM nodes became rules). It had been stuck at 0.917 on one case that scored 0.000 *identically* across every run; that consistency identified a stale expectation, not a flaky model.
+- **`campaign_agent`: the harness holds, the model is the weak link, and the numbers separate the two.** Harness invariants are flat 1.000: an irreversible tool only ever ran right after an approving human decision (`approval_invariant`), and no false alarm on the clean control. Model judgment is not: `duplicates_handled` 0.583 is what the model *asked* to launch (it requests both members of a pair) against 0.917 after the code guard refuses the second; `no_invented_ids` 0.833 is the model still making up donor ids on some runs, which the precheck then refuses. Before the fixes the live runs forced, `zip_fix_f1` was 0.25 with a false alarm on the clean control; those moved because of harness changes (ids in the profile, a conditional prompt step, a precheck, a launch guard), not a model change.
+- **The `recommendation` suite was retired**, and its history is the strongest argument in this project. Widening its scorer from five fields to all eight dropped `fields_unchanged` from 1.000 to 0.000: the model had been dropping `recency_days` on every run and flipping an outlier flag in a fifth of them. A guard repaired it. Then the better question: why is a model producing the ask at all? The ask follows a fixed rule and is money, so the call was removed instead of guarded. A suite scoring a step that no longer has a model would read 1.000 by construction.
+- **Calibration** is measured but not over-claimed: at n=33 the reliability table demonstrates the mechanism and catches gross miscalibration, not enough to set production thresholds from. It shows the model *under*-confident, the safe direction for a pipeline that routes on these numbers.
 
 ### Why the framework is shaped this way
 
@@ -1019,6 +988,19 @@ Calibration is measured but deliberately not over-claimed: at n=33 the reliabili
 **Why results carry a git SHA and model names.** A score is only meaningful if you can attribute it to code. Results are written to `backend/evals/results/latest.json`, compared against the committed `baseline.json`, and persisted to an `eval_runs` table with the git SHA and both model names. Recording the models matters as much as the SHA: swapping provider or model moves *every* metric at once, which reads as a code regression in a delta column unless the report can say otherwise — so `render_console` prints an explicit model-drift warning when the baseline's models differ from the current ones.
 
 Sweeps are usually run mid-iteration, so a bare `HEAD` would silently credit the last commit for scores produced by uncommitted code. `current_git_sha()` therefore appends `-dirty` when tracked files are modified. This was found the way such things usually are — by checking: an earlier baseline recorded `pdf_generation` metrics against a SHA whose tree contained no `pdf_generation` suite, because that sweep had run before the phase was committed. The current baseline was re-swept on a clean tree specifically so its SHA reproduces it.
+
+## How it was built
+
+| Phase | Scope |
+|---|---|
+| 1-3 | Donor Verification (tool-calling loop over a real CRM MCP server), Address Intelligence, Donation Recommendation (deterministic RFM and ask ladder, RAG over campaign knowledge); first `interrupt()`-based human review; the evaluation framework, built early on purpose |
+| 4-6 | Campaign Personalization, Compliance (state-registration lookup, letter-risk review), PDF Generation and a mocked print vendor |
+| 7-8 | Review queue and per-run decision history; React dashboard; OpenTelemetry tracing, Prometheus metrics, Jaeger and Grafana; CI |
+| 9 | JWT auth with `admin`/`reviewer` roles; CSV donor ingestion, staged and never auto-run |
+| Hardening | Bounded compliance revise loop; held letters with release/discard; do-not-contact enforced in code; atomic claims for concurrent reviewers; recovery for stalled runs and releases |
+| 10 | **The campaign agent**: campaign membership and set-level tools, the harness (gateway, tiers, budgets, durable runs, atomic approvals), the agent loop on its own queue, stalled-agent recovery, the dashboard views, the `campaign_agent` eval suite |
+| 11 | **Deterministic donor workflow**: address assessment and ask selection stopped calling a model (14 nodes to 12, 8 LLM nodes to 6); the `recommendation` suite retired; baselines re-swept |
+| Ops | LiteLLM proxy with budget caps and a hosted-model option; Kubernetes manifests, deployed and exercised on kind |
 
 ## Design decisions and trade-offs
 
