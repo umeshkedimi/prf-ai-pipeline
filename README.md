@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/umeshkedimi/prf-ai-pipeline/actions/workflows/ci.yml)
 
-A production-grade **agentic AI platform** for nonprofit fundraising campaigns. It takes donor records exported from a CRM and turns them into personalized, compliant, print-ready fundraising letters (PRFs) — automating donor validation, enrichment, personalization, and document generation through a multi-agent LangGraph workflow with human-in-the-loop review.
+A production-grade **agentic AI platform** for nonprofit fundraising campaigns. It takes donor records exported from a CRM and turns them into personalized, compliant, print-ready fundraising letters (PRFs) — automating donor validation, enrichment, personalization, and document generation through a LangGraph workflow of seven specialised stages with human-in-the-loop review — and, above it, one harnessed **campaign agent** that prepares a whole list of donors for mailing.
 
-Built as a portfolio-quality reference architecture for Agentic AI / AI Platform Engineering roles: multi-agent orchestration, confidence-based routing, RAG, MCP tool integrations, checkpointing/resume, evaluation-driven development, and full explainability/auditability.
+Built as a portfolio-quality reference architecture for Agentic AI / AI Platform Engineering roles: a bounded agent harness (permission tiers, budgets, approval gates), confidence-based routing, RAG, MCP tool integrations, checkpointing/resume, evaluation-driven development, and full explainability/auditability.
 
-**In one sentence:** `POST /workflow/run {"donor_id": "d-0009"}` → seven agents verify the donor, repair a stale address, compute a defensible ask amount, draft a grounded letter, review it for legal risk, and hand a print-ready PDF to a mail vendor — pausing for a human whenever a deterministic rule says the decision is too consequential to automate.
+**In one sentence:** `POST /workflow/run {"donor_id": "d-0009"}` → seven stages verify the donor, repair a stale address, compute a defensible ask amount, draft a grounded letter, review it for legal risk, and hand a print-ready PDF to a mail vendor — pausing for a human whenever a deterministic rule says the decision is too consequential to automate.
 
 ---
 
@@ -18,6 +18,7 @@ Built as a portfolio-quality reference architecture for Agentic AI / AI Platform
 - [Status](#status)
 - [The pipeline graph](#the-pipeline-graph)
 - [The agents](#the-agents)
+- [The campaign agent and its harness](#the-campaign-agent-and-its-harness)
 - [Human review](#human-review)
 - [Status and confidence semantics](#status-and-confidence-semantics)
 - [Data model](#data-model)
@@ -130,16 +131,22 @@ These are the load-bearing decisions. Everything else follows from them.
 │   │   ├── mcp_clients/        MultiServerMCPClient wrappers + response parsing
 │   │   ├── rag/                pgvector retrieval — embeddings, store, retriever
 │   │   ├── evals/              harness (types, runner, scorers, report, store)
-│   │   │                       + suites/ (8 suites)
+│   │   │                       + suites/ (9 suites)
 │   │   ├── workers/            Celery app + tasks + Prometheus metrics, plus
-│   │   │                       release_claims.py / run_recovery.py (stuck-work recovery)
+│   │   │                       release_claims.py / run_recovery.py / agent_recovery.py
+│   │   │                       (stuck-work recovery) and agent_tasks.py (the agent queue)
+│   │   ├── campaigns/          membership, set-level queries, outcome reasons, status sync,
+│   │   │                       synthetic planted-defect campaigns — Phase 10
+│   │   ├── harness/            tool gateway, permission tiers, budgets, agent-run store,
+│   │   │                       the campaign tool registry — Phase 10
+│   │   ├── campaign_agent/     the agent loop, prompts, runtime wiring, report — Phase 10
 │   │   ├── donors/             CSV ingestion (parse, validate, upsert) — Phase 9b
-│   │   ├── api/v1/endpoints/   FastAPI routes (auth, donors, workflow, health)
+│   │   ├── api/v1/endpoints/   FastAPI routes (auth, donors, campaigns, agent, workflow, health)
 │   │   ├── db/models/          SQLAlchemy models
 │   │   ├── schemas/            Pydantic request/response schemas
 │   │   └── core/               config, llm factory, audit, logging, telemetry, security
 │   ├── knowledge/              markdown corpus ingested into pgvector (6 docs)
-│   ├── alembic/versions/       9 migrations
+│   ├── alembic/versions/       12 migrations
 │   ├── scripts/                seed_db, seed_users, ingest_knowledge, run_evals, run_workflow_cli
 │   ├── evals/results/          baseline.json (committed), latest.json (gitignored)
 │   ├── storage/letters/        generated PDFs (gitignored)
@@ -149,7 +156,7 @@ These are the load-bearing decisions. Everything else follows from them.
 ├── litellm/                    proxy config — model aliases, budget + rpm caps
 ├── k8s/                        Kustomize base + overlays/kind
 ├── .github/workflows/ci.yml    ruff check + offline unit suite
-└── docker-compose.yml          12 services
+└── docker-compose.yml          13 services
 ```
 
 Every agent directory follows the same shape, so a reviewer who reads one can navigate all seven. Where an agent has deterministic logic, it lives in its own module (`rfm.py`, `rules.py`, `render.py`) rather than inside `agent.py` — that separation is the determinism boundary made visible in the file tree.
@@ -170,10 +177,11 @@ Built **incrementally, phase by phase**, each phase fully working and demoable b
 | **8** ✅ | **8a** React review dashboard (`frontend/`). **8b** OpenTelemetry tracing + Prometheus metrics + Jaeger/Grafana (`observability/`) — one trace per run spanning API, Celery, and every agent node. **8c** CI (`.github/workflows/ci.yml`) — lint + offline unit suite on every push/PR |
 | **9** ✅ | **9a** Auth — JWT login, `admin`/`reviewer` roles, every `/workflow` route requires a session, human-review decisions attributed to the real logged-in user instead of a client-supplied string. **9b** CSV donor ingestion (`POST /donors/ingest`, admin-only, upserts by `external_id`) staged — never auto-runs — plus `GET /donors/unrun` and `POST /workflow/run/batch` to explicitly trigger runs on staged donors |
 | **Hardening** ✅ | Post-Phase-9 work on making the agents safer to operate: a bounded compliance critique → revise loop (`revise_letter`); `reconcile_decision` (reviewer notes → letter guidance); a letter Compliance still disapproves is **held** from the print vendor and a human can release or discard it (`POST /workflow/{id}/release`); do-not-contact/suppression **enforced in code** (`enforce_eligibility`) and re-checked when a paused run resumes; atomic claims and stage binding on `/review` for concurrent reviewers; recovery for runs and releases whose worker died (`heartbeat_at`, migration 0009) |
+| **10** ✅ | **The campaign agent.** `campaign_donors` membership + set-level tools (profile, duplicate pairs, failure clusters); `app/harness/` (tool gateway, four permission tiers, budgets, durable `agent_runs`/`agent_steps`, atomic approval claim); the LangGraph agent loop on its own Celery queue; stalled-agent recovery (migration 0012); dashboard trajectory + approval UI; a `campaign_agent` eval suite scored on planted-defect campaigns |
 
 **Evaluation framework** ✅ — built early, at three agents rather than seven, deliberately: evals written after the fact get written to pass, encoding existing behavior as correct. See [Evaluation framework](#evaluation-framework).
 
-All nine phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
+All ten phases, the hardening pass above, and the evaluation framework are complete — see [Authentication and authorization](#authentication-and-authorization) and [CSV donor ingestion](#csv-donor-ingestion).
 
 ## The pipeline graph
 
@@ -228,6 +236,8 @@ This is deliberately a *code-organization* split, not LangGraph nested subgraphs
 
 ## The agents
 
+> **Read this first.** The seven below are *specialised stages of a workflow*, not autonomous agents. For one donor the order of work is fixed, the routing is a deterministic function of recorded facts, and a model is called only where judgment is needed (is this a duplicate? is this letter's wording risky?). Calling them agents oversold the design; the one place a model genuinely decides *what happens next* is the [campaign agent](#the-campaign-agent-and-its-harness), which operates a whole list of donors.
+
 **Donor Verification** (Phase 1) — 3 nodes:
 
 1. **`fetch_core_data`** — deterministic `get_donor_profile` MCP call. `do_not_contact`/suppression flags are read as-is, never inferred by the LLM.
@@ -262,6 +272,46 @@ The ladder is **outlier-robust**: if the top gift dwarfs the rest of the history
 **PDF Generation** (Phase 6) — 1 node, the pipeline's terminus:
 
 1. **`generate_pdf`** — fully deterministic, **no LLM call at all**: every judgment the letter needed (copy, risk review) already happened upstream, so what's left is mechanical layout and a vendor order. Renders a print-ready single-page PDF (`reportlab`) styled as a real appeal letter — a letterhead (org name, tagline, contact line, accent-color rule), the dated recipient block, the drafted salutation/body/closing, a highlighted "your gift today" callout box built from the deterministic `recommended_ask` (never the letter's own prose — same non-LLM-boilerplate reasoning as the disclosures), a signature block, a P.S. line, the required disclosures, a QR code encoding a donation-tracking URL, and a Code128 barcode encoding a deterministic mail-piece reference (`sha256(workflow_run_id)[:8]` — stable across re-renders, distinct per run, so eval assertions can predict it). Body text wraps by actual glyph width (`pdfmetrics.stringWidth`), not a fixed character count, since the letter fonts are proportional. **The vendor order is the pipeline's one irreversible side effect, so it is gated on Compliance:** a letter still disapproved after the revise loop is rendered (a reviewer can read it via `GET /workflow/{id}/pdf`) but no order is submitted — `pdf_result` carries `held: true`, a `hold_reason` taken from the flagged issues, and null order fields. Only an explicit `approved: false` holds; a missing verdict does not. A human can then release or discard a held letter (see *Releasing a held letter* under Human review). Otherwise it submits the reference to the mocked Print Vendor MCP server and merges its order confirmation (`vendor_order_id`, `tracking_number`, `postage_class`, `turnaround_days`, `cost`) into `pdf_result`. The org identity in the letterhead (address, phone, signer name) is invented, synthetic detail, the same fictional-but-consistent convention as the rest of the seed data.
+
+## The campaign agent and its harness
+
+A campaign holds 10 to 2,000 donors. A reviewer cannot read every run, and the interesting failures are *systemic* — one bad import column breaking 80 addresses, a duplicate pair, a state the org cannot solicit in. That is a different problem from processing one donor, and it is where an agent earns its place: the work is open-ended (no fixed graph can say what to do about the failures *this* list has), it can be checked, and the cost of a wrong move can be bounded.
+
+```
+Admin: "Prepare this campaign for mailing"
+  → POST /campaigns/{id}/agent/run  → Celery (queue: agent)
+       think ─▶ act ─▶ think ─▶ …            (LangGraph; checkpointed, resumable)
+                 │
+        every tool call goes through the HARNESS GATEWAY
+                 │  budget → allowlist → argument validation → precheck
+                 │  → permission tier → (human interrupt) → execute → audit
+                 ▼
+        profile_campaign · find_duplicate_pairs · cluster_failures · list_donors_by_status
+        wait_for_runs · launch_donor_runs (act) · pad_postal_codes (irreversible) · propose_action
+```
+
+**The harness (`app/harness/`)** is plain Python the model cannot argue with:
+
+- **Permission tiers.** `read` and `propose` are free; `act` is charged against a donor-run budget; `irreversible` (editing donor records) *never executes without a human*. `approved` is a parameter of the gateway call, not part of the agent's arguments, and every argument model forbids unknown keys — a model that passes `approved: true` gets an error back.
+- **Budgets.** Hard caps on steps, tokens and donor runs. Every attempted call costs a step *including denied and invalid ones*, so an agent that keeps retrying a forbidden action still terminates. The run budget is pre-checked against what was asked and charged for what actually launched.
+- **Scope.** No tool takes a `campaign_id`; each is bound to one campaign when built. The agent cannot reach another campaign whatever it is told.
+- **Errors are observations.** A denied, invalid or failed call comes back as data the model can react to; nothing raises into the loop.
+- **A trajectory you can replay.** Every call (and every human decision) is a row in `agent_steps`; the final report's numbers come from the database and that trail, with the model's own summary included but labelled as its words.
+- **Durability.** `agent_runs` carries status, budget usage, the call awaiting a human, and a heartbeat. A paused run is claimed with one conditional `UPDATE` (two reviewers cannot both resume it); a run whose worker died is detected by its quiet heartbeat and continued from its checkpoint.
+
+**Rules that are enforced in code because prompting them failed** — each was found by running the agent live, not by reasoning about it:
+
+| Found live | Enforced as |
+|---|---|
+| The model flagged a duplicate pair, then launched *both* members | `launch_donor_runs` refuses the second member of any probable-duplicate pair |
+| The model invented donor ids (`donor-1234`) to "fix" | `pad_postal_codes` prechecks ids and refuses *before* any human is asked; `profile_campaign` returns the ids so there is nothing to guess |
+| The model said "done" mid-plan with work still queued | A completion check compares the claim to the database and sends it back (at most twice) |
+| The agent task deadlocked the donor runs it launched | The agent runs on its own queue and worker (`celery-agent-worker`) |
+| The run budget was charged for ids requested, not donors launched | Charged for what happened |
+
+**What it deliberately cannot do.** It cannot change money, an ask amount, a disclosure, or a donor's eligibility — those stay in the deterministic per-donor workflow it launches. It proposes; code or a human executes.
+
+**How it is measured** (`campaign_agent` eval suite, see [Evaluation framework](#evaluation-framework)): four synthetic campaigns with a ground-truth manifest of planted defects — malformed ZIPs, duplicate pairs, unregistered states, an opted-out donor — plus a *clean* control that catches false alarms. The per-donor workflow and the human reviewer are simulated so the suite measures the agent's judgment, not the pipeline's speed. Scores use what the model *requested* (the audit args), with `_effective` twins for what survived the guards.
 
 ## Human review
 
@@ -394,6 +444,13 @@ Base path: `/api/v1`. Interactive docs at `http://localhost:8000/docs`.
 | `GET` | `/auth/users` | Admin-only. List all users |
 | `POST` | `/donors/ingest` | Admin-only. Multipart CSV upload — upserts by `external_id`, never starts a run. Returns per-row insert/update/reject counts |
 | `GET` | `/donors/unrun` | Donors with zero workflow runs — the staging list for a batch trigger. Query: `limit` (default 200) |
+| `POST` | `/campaigns` | Admin-only. Create a campaign `{"name", "appeal_code"?}` |
+| `GET` | `/campaigns` · `/campaigns/{id}` | List campaigns · one campaign with donor counts by status |
+| `POST` | `/donors/ingest?campaign_id=` | (as above) with `campaign_id`, uploaded donors are attached to that campaign as `staged` |
+| `POST` | `/campaigns/{id}/agent/run` | Admin-only. Start the campaign agent `{goal?, max_steps, max_tokens, max_runs}`; `202`, runs asynchronously |
+| `GET` | `/campaigns/{id}/agent-runs` | Recent agent runs for a campaign |
+| `GET` | `/agent-runs/{id}` | One agent run: status, budget usage, pending approval, final report, and the full step trajectory |
+| `POST` | `/agent-runs/{id}/approval` | Admin-only. Answer the call the agent is paused on `{tool, approve, notes?}`. `409` if nothing is pending, `tool` doesn't match, or another reviewer answered first |
 | `POST` | `/workflow/run` | Start a run. Body `{"donor_id": "d-0009"}`. Returns `202` + the run record |
 | `POST` | `/workflow/run/batch` | Body `{"donor_ids": [...]}`. Enqueues one run per donor; a bad id is reported per-item, not fatal to the batch |
 | `GET` | `/workflow/reviews` | Review queue — `awaiting_review` + `needs_review` runs, oldest first. Query: `status`, `limit` (default 50), `offset` |
@@ -528,7 +585,8 @@ The `pgdata` volume persists, so seeding and ingestion are one-time — subseque
 | Redis | 6379 | Celery broker |
 | MCP: CRM / Address / Compliance / Print Vendor | 8100–8103 | streamable-HTTP |
 | LiteLLM proxy | 4000 | OpenAI-compatible; `/v1/models` lists the served aliases |
-| Celery metrics | 9100 | Prometheus scrape target |
+| Celery metrics | 9100 | Prometheus scrape target (the donor worker) |
+| Celery agent worker | — | consumes only the `agent` queue; no host port |
 | Jaeger UI | 16686 | traces |
 | Prometheus | 9090 | |
 | Grafana | 3000 | anonymous admin, local-only |
@@ -552,6 +610,8 @@ A minimal Vite + React + TypeScript app consuming the review-queue API — no fr
 
 The **Donors** tab (`DonorImport.tsx`, Phase 9b) is a CSV upload form (admin-only) plus a checkbox list of never-run donors with a "Start N runs" button — open to both roles, since triggering a run is a normal reviewer action even though uploading the donor dataset isn't.
 
+The **Campaigns** tab (Phase 10: `Campaigns.tsx`, `CampaignDetail.tsx`, `AgentRunView.tsx`) is where the campaign agent is run and watched: create a campaign, upload a donor CSV *into* it (donors stay `staged`), then "Prepare campaign for mailing" with a step and donor-run budget. The agent-run view polls while the run is live and shows three budget bars, the **trajectory** (every tool call with its permission tier, outcome and result, and the human decisions interleaved), a prominent **approval card** when the agent is paused on an irreversible call (it shows the exact donor ids, the agent's reasoning, and Approve / Deny), and the final report — whose counts come from the database, with the model's own summary labelled as its words.
+
 `Login.tsx` gates the whole app: `App.tsx` checks for a stored token via `GET /auth/me` on load and renders the login form until that succeeds. The token lives in `localStorage`, is attached as a `Bearer` header on every request (`api.ts`), and any `401` response clears it — an expired session drops back to login on the next action rather than failing silently.
 
 ```bash
@@ -571,7 +631,7 @@ A submitted decision resumes the graph asynchronously via Celery, so the UI offe
 
 ## Running on Kubernetes
 
-`docker-compose.yml` remains the primary way to run this. The same 12 services
+`docker-compose.yml` remains the primary way to run this. The same 13 services
 also deploy to Kubernetes via a Kustomize base in [`k8s/`](k8s/README.md),
 verified end-to-end on a local [kind](https://kind.sigs.k8s.io/) cluster.
 
@@ -857,7 +917,7 @@ Every donor clearing all three gates continues through `personalize_letter`, `re
 
 ```bash
 cd backend
-uv run pytest                 # 202 unit tests, mocked LLM + MCP + retriever (~2.3s)
+uv run pytest                 # 262 unit tests, mocked LLM + MCP + retriever (~2.3s)
 uv run pytest -m integration  # real stack: live LLM + embeddings, MCP servers, Postgres (~4min)
 ```
 
@@ -897,10 +957,11 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `compliance` | disclosure-lookup correctness (deterministic) + letter-content risk review | 4 |
 | `pdf_generation` | deterministic PDF assembly + vendor order correctness — no LLM call, so no judge scorer | 3 |
 | `trajectory` | end-to-end routing: terminal state and node path (expensive, opt-in) | 12 |
+| `campaign_agent` | the campaign agent's trajectory on planted-defect campaigns: ZIP-fix F1, invented ids, duplicate handling, false alarms, budget, approval invariant (expensive, opt-in) | 4 |
 
 ### Committed baseline
 
-`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case. From `backend/evals/results/baseline.json`, recorded at `c8ba63c` on a clean tree:
+`qwen2.5:14b` (pipeline) judged by `llama3.1:8b`, 3 runs per case. From `backend/evals/results/baseline.json`, recorded on a clean tree (each suite's own SHA is in the file — see below):
 
 | suite | headline metrics | duration |
 |---|---|---|
@@ -912,8 +973,9 @@ Every case runs N times (default 3), because `get_llm()` deliberately doesn't pi
 | `compliance` | all four scorers **1.000** | 36s |
 | `pdf_generation` | all five deterministic scorers **1.000** | 1s |
 | `trajectory` | `node_path_exact` **1.000** · `reached_recommendation` **1.000** · `terminal_state_correct` **1.000** | 1098s |
+| `campaign_agent` | `approval_invariant` **1.000** · `duplicates_handled_effective` **1.000** · `no_false_alarms` **1.000** · `zip_fix_f1` 0.833 · `duplicates_handled` 0.708 · `no_invented_ids` 0.833 · `completed_within_budget` 0.917 | 808s |
 
-One caveat about that SHA, stated rather than papered over: the baseline file carries a *single* top-level `git_sha`, but `promote_to_baseline` merges per-suite — it deliberately won't erase suites a partial sweep skipped. Seven of the eight rows above were measured at `c8ba63c`. The `trajectory` row was last promoted at `5e32501` and has **not** been re-swept since the determinism guard landed, so the file's SHA overstates that one row's provenance. Two attempts to re-sweep it were refused by the runner over an execution error (below), and forcing it would have recorded a fabricated number to make the bookkeeping tidy. The real fix is a per-suite SHA; it is an open item, not a solved one.
+Provenance is **per suite**: each entry in `baseline.json` carries its own `git_sha` and `measured_at`, because the file is merged suite by suite and a single top-level SHA would credit untouched suites to a commit that never measured them. (The entries that predate this were backfilled from the recorded history: seven at `c8ba63c`, `trajectory` at `5e32501`. `trajectory` has still not been re-swept since the determinism guard — two attempts were refused over an execution error, and forcing it would have recorded a fabricated number.)
 
 Every row above was recorded from a sweep with zero execution errors — that is a precondition for promotion, not a coincidence: `--set-baseline` refuses a run that had any. Reading the misses honestly:
 
@@ -923,6 +985,7 @@ Every row above was recorded from a sweep with zero execution errors — that is
 - **`recommendation` `fields_unchanged` fell from 1.000 to 0.000 — and that is the measurement getting honest, not a regression.** Nothing about the system got worse; the scorer started checking the whole thing. It previously compared five of the eight fields the RFM computation owns. Widened to all eight (sourced from `DETERMINISTIC_FIELDS`, so scorer and guard cannot drift apart), it reports 0.000 on all five cases across all three runs — `[0.0, 0.0, 0.0]` every time, with no case flagged flaky. A deterministic zero is a finding, not noise: the model drops `recency_days` on *every* donor on *every* run, and always had. The three unchecked fields included `outlier_gift_excluded` — d-0006's outlier protection — which audit-log inspection showed the model flipping in 20% of runs. A clean 1.000 was being reported the entire time. This is the sharpest thing the eval framework has caught, and it argues the general point better than any passing score does: measurement is only as good as its coverage, and a metric that cannot fail teaches you nothing.
 - **`recommendation` `outlier_respected` 1.000 and `sources_valid` 1.000**, up from 0.800 and 0.733. `outlier_respected` is the guard working — `enforce_deterministic_fields` restores the flag the model flipped. `sources_valid` is not a real improvement: it is the same flakiness that produced 0.733, landing the other way. The previous baseline's own note said the 0.733 was sweep variance rather than a level, and this sweep is the confirmation. `campaign_personalization`'s `sources_valid` 0.733 is explicitly flagged flaky by the runner (d-0006, d-0008, d-0011, all with mixed run scores).
 - **`fields_unchanged` is now saturated, which is a live weakness worth naming.** Pinned at 0.000 by `recency_days` — a cosmetic field — the metric has no room left to move, so if `outlier_gift_excluded` degraded to failing every run the score would not budge. That is the same objection this README makes about tuning `adoption-story` to pass: a metric that cannot discriminate has stopped being a measurement. Splitting money-critical fields from cosmetic ones would fix it. Deliberately not done yet, because it changes what is being measured and needs its own sweep to re-baseline.
+- **`campaign_agent`: the harness holds, the model is the weak link — and the numbers show which is which.** The invariants are flat 1.000 (`approval_invariant`: an irreversible tool only ever ran right after an approving human decision; `duplicates_handled_effective`: the duplicate guard held). The model's own judgment is not: `duplicates_handled` 0.708 is the gap between what it *asked* to launch and what the guard allowed; `zip_fix_f1` 0.833 is flaky (`[0.0, 1.0, 1.0]` on identical runs — sometimes it simply doesn't fix the planted defect); `no_invented_ids` 0.833 is the model still making up ids on some runs, which the precheck then refuses. The first sweep, before the fixes the live runs forced, scored `zip_fix_f1` 0.25 and a false alarm on the clean control — those two moved because of harness changes (ids in the profile, a conditional prompt step, a precheck), not a model change. Kept as is rather than tuned: it is the honest picture of a 14B local model operating under a harness.
 
 Calibration is measured but deliberately not over-claimed: at n=33 the reliability table is enough to demonstrate the mechanism and catch gross miscalibration, not enough to set production thresholds from. It currently shows the model *under*-confident — stated 0.736 against observed 1.000 in the 0.7–0.8 bucket — which is the safe direction for a pipeline that routes on these numbers.
 
@@ -946,6 +1009,12 @@ Sweeps are usually run mid-iteration, so a bare `HEAD` would silently credit the
 
 Decisions worth defending, with the counter-argument stated rather than hidden:
 
+**One agent, not seven.** The original design split a single donor's pipeline into seven "agents", which could not be defended: the order is fixed, routing is deterministic, and a model is called only for judgment. The agent was moved to where the problem is genuinely open-ended — a whole campaign — and the per-donor stages were relabelled as workflow stages rather than gutted, because removing their LLM calls would have invalidated the committed eval baselines for little demonstrable gain. The counter-argument: "stages with an LLM in them" is a weaker story than a clean deterministic workflow with two narrow LLM calls, and a stricter redesign would do that.
+
+**The agent proposes; code or a human executes.** It has one irreversible tool (editing donor records) and it cannot run without approval. The cost is friction: a human is in the loop for a fix an engineer would call obvious. The alternative — letting a 14B model edit data on its own judgment — is exactly what the eval scores say not to do.
+
+**The agent's control plane has its own worker.** A campaign agent blocks while the donor runs it launched execute; on a shared single-slot worker it deadlocks them. Found live, fixed with a second queue and Deployment. The counter-argument is operational weight: two worker pools to run and monitor for what is, at demo scale, one user.
+
 **The `gather_context` tool loop is deliberately over-general.** It lets the LLM choose between `get_donation_history` and `find_potential_duplicate_donors` when in practice **both are always wanted** — 2–3 LLM calls per run to make a non-decision, and the one place non-determinism picks what runs next. Fetching both directly would cut verification cost ~40% and remove the flakiness visible in the eval baseline above. **Kept anyway:** it's a genuine agentic tool-calling demonstration, and it's the single accepted exception to the determinism boundary rather than an unnoticed leak. The cost is measured, not assumed.
 
 **Bounded retries, added on evidence.** Local inference intermittently produced two specific failures — `json.loads('')` inside the tool loop, and structured-output parse failures where the model emitted `confidence: 2` against a `0.0–1.0` schema. Three independent eval sweeps measured the rate (~5–9% of runs) *before* any retry was written. The fix is bounded (3 attempts, not infinite) so a genuinely broken input still fails loudly. This is the pattern the whole eval framework exists to enable: measure, then fix, then re-measure.
@@ -964,6 +1033,10 @@ Stated plainly, because a portfolio piece that hides its edges is less useful th
 
 - **Auth is single-org RBAC, not multi-tenant.** Phase 9a (see [Authentication and authorization](#authentication-and-authorization)) added JWT login and two roles, but there is no per-tenant data isolation — every user sees every donor/campaign/run. True multi-tenancy (isolated organizations) was scoped out deliberately as a bigger data-model change than this internal tool needs.
 - **Donor import provenance isn't tracked per-donor.** `donor_imports` records who uploaded a CSV and when, but a `Donor` row itself doesn't say whether it came from that upload, `seed_db.py`, or the CRM MCP server — `GET /donors/unrun` deliberately shows all never-run donors regardless of source, which was the simpler and sufficient design, but it does mean there's no "donors from this specific upload" view.
+- **The campaign agent is only as good as the model under it.** On `qwen2.5:14b` it finds the planted ZIP defect in roughly 5 of 6 runs and still invents ids on some; the harness bounds the damage (nothing irreversible runs without a human, invented ids are refused) but does not make the model smarter. Measured, not hidden — see the `campaign_agent` row of the baseline.
+- **The agent eval simulates the per-donor workflow and the reviewer.** It measures the agent's judgment, not the end-to-end path; the live runs that found the deadlock and the budget bug are manual, not in CI.
+- **No periodic sweeper for agent runs.** Stalled-agent recovery runs when a worker starts and once after the TTL, like the pipeline's; a worker that stays down is not retried until something restarts it.
+- **The agent's `launch_donor_runs` cost is a pre-check upper bound,** so a retry that lists many already-launched donors can be refused for budget it would not have spent.
 - **All external integrations are mocked.** CRM, address verification, compliance registration, and the print vendor return synthetic fixtures. The **MCP protocol layer is real** — swapping in a live vendor is a URL change — but no real address has ever been verified and no real letter has ever been mailed.
 - **Embeddings require `OPENAI_API_KEY` even on the otherwise key-free Ollama configuration**, because retrieval embeds the query at runtime. Moving to local embeddings requires re-ingesting the corpus, and any dimension other than 1536 needs a migration on the `Vector` column.
 - **`core/config.py`'s in-code defaults still name `google_genai`**, while `.env.example` and the eval baseline use Ollama. A copied `.env` wins, so this only affects running with no `.env` at all.

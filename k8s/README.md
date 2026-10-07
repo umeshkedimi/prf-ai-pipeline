@@ -1,6 +1,6 @@
 # Kubernetes manifests
 
-The same 12 services `docker-compose.yml` runs, as Kubernetes objects. Structured
+The same 13 services `docker-compose.yml` runs, as Kubernetes objects. Structured
 as a Kustomize base plus environment overlays so the base stays cloud-neutral.
 
 ```
@@ -83,7 +83,7 @@ driver pulls from AWS Secrets Manager. Same boundary, real implementation.
 
 Confirmed against a live kind cluster, not asserted:
 
-- All 12 pods reach `Running`, zero restarts.
+- All 13 pods reach `Running`, zero restarts. (The 13th, `celery-agent-worker`, was added after the cluster was last brought up: the manifest renders and validates, but it has not been deployed to a live cluster.)
 - A full d-0001 workflow via the API NodePort completes through `pdf_generation`,
   with all six pipeline agents present.
 - `GET /workflow/{id}/pdf` returns a real PDF — which also proves the shared PVC
