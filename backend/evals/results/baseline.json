@@ -205,9 +205,9 @@
     "trajectory": {
       "suite": "trajectory",
       "description": "End-to-end routing: terminal state and node path across the whole graph",
-      "runs_per_case": 3,
+      "runs_per_case": 1,
       "case_count": 12,
-      "duration_s": 1098.16,
+      "duration_s": 383.08,
       "metrics": [
         {
           "name": "terminal_state_correct",
@@ -229,13 +229,13 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 30503.8,
+          "value": 31923.1,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 53721.0,
+          "value": 67073.0,
           "detail": null,
           "note": null
         }
@@ -244,14 +244,15 @@
       "failures": [],
       "errors": [],
       "scorer_errors": [],
-      "git_sha": "5e32501"
+      "git_sha": "d57642e1c8a5cf4a0aee16f37a37bc49895a2ff6",
+      "measured_at": "2026-10-07T16:39:46.776405+00:00"
     },
     "campaign_personalization": {
       "suite": "campaign_personalization",
       "description": "Letter-draft rule compliance (tone/segment fidelity, ask reference) + RAG groundedness",
       "runs_per_case": 3,
       "case_count": 5,
-      "duration_s": 194.09,
+      "duration_s": 248.68,
       "metrics": [
         {
           "name": "tone_and_segment_unchanged",
@@ -261,7 +262,7 @@
         },
         {
           "name": "sources_valid",
-          "value": 0.7333,
+          "value": 0.5333,
           "detail": null,
           "note": null
         },
@@ -285,34 +286,34 @@
         },
         {
           "name": "latency_ms_mean",
-          "value": 12501.8,
+          "value": 16067.8,
           "detail": null,
           "note": null
         },
         {
           "name": "latency_ms_max",
-          "value": 15906.0,
+          "value": 19990.0,
           "detail": null,
           "note": null
         }
       ],
       "flaky_case_ids": [
-        "d-0006",
         "d-0008",
+        "d-0009",
         "d-0011"
       ],
       "failures": [
         {
-          "case_id": "d-0006",
+          "case_id": "d-0001",
           "scorer": "sources_valid",
-          "mean_score": 0.333,
+          "mean_score": 0.0,
           "run_scores": [
-            1.0,
+            0.0,
             0.0,
             0.0
           ],
           "expected": {
-            "scenario": "active donor with a multi-gift history"
+            "scenario": "active donor, single clean gift"
           }
         },
         {
@@ -321,19 +322,32 @@
           "mean_score": 0.667,
           "run_scores": [
             1.0,
-            0.0,
-            1.0
+            1.0,
+            0.0
           ],
           "expected": {
             "scenario": "small-dollar recurring donor"
           }
         },
         {
-          "case_id": "d-0011",
+          "case_id": "d-0009",
           "scorer": "sources_valid",
           "mean_score": 0.667,
           "run_scores": [
             1.0,
+            0.0,
+            1.0
+          ],
+          "expected": {
+            "scenario": "single modest gift"
+          }
+        },
+        {
+          "case_id": "d-0011",
+          "scorer": "sources_valid",
+          "mean_score": 0.333,
+          "run_scores": [
+            0.0,
             1.0,
             0.0
           ],
@@ -344,7 +358,8 @@
       ],
       "errors": [],
       "scorer_errors": [],
-      "git_sha": "c8ba63c"
+      "git_sha": "d57642e1c8a5cf4a0aee16f37a37bc49895a2ff6",
+      "measured_at": "2026-10-07T16:39:46.776405+00:00"
     },
     "compliance": {
       "suite": "compliance",
@@ -661,8 +676,8 @@
       "measured_at": "2026-10-07T15:31:49.931191+00:00"
     }
   },
-  "generated_at": "2026-10-07T15:31:49.931191+00:00",
-  "git_sha": "3f4204d8f8ffc701baf3723c16e8c518819280ac",
+  "generated_at": "2026-10-07T16:39:46.776405+00:00",
+  "git_sha": "d57642e1c8a5cf4a0aee16f37a37bc49895a2ff6",
   "llm_model": "qwen2.5:14b",
   "judge_model": "llama3.1:8b"
 }
