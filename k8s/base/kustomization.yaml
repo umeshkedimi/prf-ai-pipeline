@@ -21,6 +21,7 @@ resources:
   - grafana.yaml
   - api.yaml
   - celery-worker.yaml
+  - celery-agent-worker.yaml
   - migrate-job.yaml
 
 # includeSelectors: true reproduces the deprecated commonLabels behaviour

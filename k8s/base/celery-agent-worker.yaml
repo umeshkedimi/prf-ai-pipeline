@@ -1,0 +1,54 @@
+# The campaign agent's control plane: same image and config as celery-worker, but it
+# consumes only the `agent` queue (see workers/celery_app.py task_routes).
+#
+# Why a separate Deployment and not just more replicas of celery-worker: the agent
+# task blocks (wait_for_runs) while the donor runs it launched execute elsewhere. On a
+# single shared worker slot the agent would hold the only slot while waiting for work
+# that can never start -- found live, and the reason this exists.
+#
+# No Service, no metrics scrape: the donor worker is the one that carries pipeline
+# metrics. No PVC either; the agent never touches letter files.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-agent-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: celery-agent-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: celery-agent-worker }
+    spec:
+      containers:
+        - name: worker
+          image: prf-backend:local
+          command:
+            - celery
+            - -A
+            - app.workers.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=2
+            - -Q
+            - agent
+            - -n
+            - agent@%h
+          envFrom:
+            - configMapRef: { name: prf-config }
+            - secretRef: { name: prf-api-keys }
+          # Same sh -c wrapper and per-node (-d) ping as celery-worker, for the same
+          # reasons; the node name carries the agent@ prefix set by -n above.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec celery -A app.workers.celery_app inspect ping -d "agent@$(hostname)"
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 2Gi }

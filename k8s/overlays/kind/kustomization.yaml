@@ -20,7 +20,7 @@ patches:
   # an immediate ImagePullBackOff.
   - target:
       kind: Deployment
-      name: "(api|celery-worker|mcp-.*)"
+      name: "(api|celery-worker|celery-agent-worker|mcp-.*)"
     patch: |
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
