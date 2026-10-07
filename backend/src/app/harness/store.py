@@ -4,7 +4,7 @@ immediately: a worker that dies mid-loop must leave every completed step on disk
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.models import AgentRun, AgentStep
@@ -98,3 +98,26 @@ async def claim_approval(agent_run_id: uuid.UUID) -> dict | None:
         ).first()
         await session.commit()
     return None if row is None else (row.pending or {})
+
+
+async def max_seq(agent_run_id: uuid.UUID) -> int:
+    """Last persisted audit seq, so a resumed run continues the trajectory's numbering."""
+    async with db_session() as session:
+        value = (
+            await session.execute(select(func.max(AgentStep.seq)).where(AgentStep.agent_run_id == agent_run_id))
+        ).scalar()
+    return value or 0
+
+
+async def load_steps(agent_run_id: uuid.UUID) -> list[dict]:
+    async with db_session() as session:
+        rows = (
+            await session.execute(
+                select(AgentStep).where(AgentStep.agent_run_id == agent_run_id).order_by(AgentStep.seq)
+            )
+        ).scalars().all()
+    return [
+        {"seq": r.seq, "tool": r.tool, "tier": r.tier, "args": r.args, "outcome": r.outcome,
+         "observation": r.observation, "latency_ms": r.latency_ms, "created_at": r.created_at}
+        for r in rows
+    ]
