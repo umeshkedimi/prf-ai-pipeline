@@ -1,5 +1,6 @@
 from app.db.models.agent_audit_log import AgentAuditLog
 from app.db.models.campaign import Campaign
+from app.db.models.campaign_donor import CampaignDonor
 from app.db.models.donation import Donation
 from app.db.models.donor import Donor
 from app.db.models.donor_import import DonorImport
@@ -12,6 +13,7 @@ from app.db.models.workflow_run import WorkflowRun
 __all__ = [
     "AgentAuditLog",
     "Campaign",
+    "CampaignDonor",
     "Donation",
     "Donor",
     "DonorImport",

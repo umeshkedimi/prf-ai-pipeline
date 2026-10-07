@@ -24,6 +24,7 @@ class DonorImport(Base):
     uploaded_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("campaigns.id"))
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     rows_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rows_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
