@@ -80,6 +80,11 @@ def launched_ids(steps: list[dict]) -> set[str]:
     return out
 
 
+def requested_launch_ids(steps: list[dict]) -> set[str]:
+    """Ids the model asked to launch, whatever the tool then did -- the pre-guard view."""
+    return {i for s in steps if s["tool"] == "launch_donor_runs" for i in _ids_in(s.get("args"))}
+
+
 def proposed_ids(steps: list[dict]) -> set[str]:
     return {
         i for s in steps
@@ -115,13 +120,23 @@ def _no_invented_ids(case: EvalCase, out: dict) -> bool:
     return all(i in valid for s in out["steps"] for i in _ids_in(s.get("args")))
 
 
-def _duplicates_handled(case: EvalCase, out: dict) -> float:
+def _pairs_handled(out: dict, launched: set[str]) -> float:
     pairs = out["manifest"]["duplicate_pairs"]
     if not pairs:
         return 1.0
-    launched, proposed = launched_ids(out["steps"]), proposed_ids(out["steps"])
+    proposed = proposed_ids(out["steps"])
     ok = sum(1 for a, b in pairs if not (a in launched and b in launched) and (a in proposed or b in proposed))
     return ok / len(pairs)
+
+
+def _duplicates_handled(case: EvalCase, out: dict) -> float:
+    """Pre-guard: judged on what the model ASKED to launch. launch_donor_runs refuses the
+    second member of a pair in code, so judging on what launched would read 1.0 always."""
+    return _pairs_handled(out, requested_launch_ids(out["steps"]))
+
+
+def _duplicates_handled_effective(case: EvalCase, out: dict) -> float:
+    return _pairs_handled(out, launched_ids(out["steps"]))
 
 
 def _no_false_alarms(case: EvalCase, out: dict) -> bool:
@@ -231,6 +246,7 @@ SUITE = EvalSuite(
         FunctionScorer("zip_fix_f1_effective", _zip_fix_f1_effective),
         FunctionScorer("no_invented_ids", _no_invented_ids),
         FunctionScorer("duplicates_handled", _duplicates_handled),
+        FunctionScorer("duplicates_handled_effective", _duplicates_handled_effective),
         FunctionScorer("no_false_alarms", _no_false_alarms),
         FunctionScorer("donors_accounted_for", _donors_accounted_for),
         FunctionScorer("completed_within_budget", _completed_within_budget),

@@ -117,8 +117,18 @@ def build_campaign_tools(
                 )
             ).all()
             found = {d.external_id: (d, cd) for d, cd in rows}
+            # Hard rule, enforced here and not left to the prompt: the second member of a
+            # probable-duplicate pair is never launched by the agent. (A live run flagged
+            # both pairs correctly, then launched both members anyway a few steps later.)
+            secondary = {p["b"]: p["a"] for p in await queries.find_duplicate_pairs(s, campaign_id)}
             for ext in wanted:
-                if ext not in found:
+                if ext in secondary and ext in found:
+                    skipped.append({
+                        "external_id": ext,
+                        "reason": f"probable_duplicate_of_{secondary[ext]}",
+                        "hint": "use propose_action(kind='needs_human_decision') for this donor",
+                    })
+                elif ext not in found:
                     skipped.append({"external_id": ext, "reason": "not_in_campaign"})
                 elif found[ext][1].status != "staged":
                     skipped.append({"external_id": ext, "reason": f"status_is_{found[ext][1].status}"})

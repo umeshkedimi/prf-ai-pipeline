@@ -80,6 +80,23 @@ async def test_launch_creates_runs_marks_queued_and_refuses_a_second_launch(camp
     assert again.observation["skipped"][0]["reason"] == "status_is_queued" and len(launched) == 1
 
 
+async def test_launch_refuses_the_second_member_of_a_probable_duplicate_pair(campaign):
+    cid, launched = campaign
+    async with db_session() as s:
+        twins = [
+            Donor(external_id=f"at-{_TAG}-t{i}", first_name="Marguerite", last_name="Fontaine",
+                  address_line1="14 Alder Court", state="WA", postal_code="98101")
+            for i in (1, 2)
+        ]
+        s.add_all(twins)
+        await s.commit()
+        await attach_donors_by_external_id(s, cid, [t.external_id for t in twins])
+        await s.commit()
+    r = await _gw(cid).call("launch_donor_runs", {"external_ids": [f"at-{_TAG}-t1", f"at-{_TAG}-t2"]})
+    assert r.observation["launched"] == 1 and len(launched) == 1
+    assert r.observation["skipped"][0]["reason"].startswith("probable_duplicate_of_")
+
+
 async def test_sync_marks_a_completed_run_ready_and_an_unregistered_one_blocked(campaign):
     cid, _ = campaign
     async with db_session() as s:
