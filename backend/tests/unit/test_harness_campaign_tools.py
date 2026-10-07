@@ -22,12 +22,6 @@ def test_the_only_irreversible_tool_is_the_data_edit_and_it_needs_approval():
     assert {t.name for t in tools if t.tier is Tier.ACT} == {"launch_donor_runs"}
 
 
-async def test_irreversible_edit_is_not_executed_without_approval():
-    _, gw = _gw()
-    r = await gw.call("pad_postal_codes", {"external_ids": ["a"], "reason": "leading zeros dropped"})
-    assert r.outcome is Outcome.NEEDS_APPROVAL
-
-
 async def test_launch_cost_is_the_number_of_distinct_donors():
     tools, gw = _gw()
     gw.budget.max_runs = 2

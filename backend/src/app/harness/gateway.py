@@ -127,6 +127,10 @@ class ToolGateway:
             errors = [f"{'.'.join(map(str, e['loc'])) or '(root)'}: {e['msg']}" for e in exc.errors()]
             return ToolResult(Outcome.INVALID_ARGS, name, {"errors": errors}, spec.tier, args)
 
+        if spec.precheck is not None:
+            problem = await spec.precheck(parsed)
+            if problem:
+                return ToolResult(Outcome.INVALID_ARGS, name, {"errors": [problem]}, spec.tier, args)
         if spec.tier is Tier.IRREVERSIBLE and not approved:
             return ToolResult(
                 Outcome.NEEDS_APPROVAL, name,

@@ -49,18 +49,25 @@ def _gw(cid, **kw):
     return ToolGateway(build_campaign_tools(cid, set()), set(CAMPAIGN_AGENT_ALLOWLIST), Budget(**kw))
 
 
-async def test_pad_zip_edits_only_four_digit_codes_and_only_when_approved(campaign):
+async def test_pad_zip_refuses_ineligible_ids_before_any_human_is_asked(campaign):
     cid, _ = campaign
     gw = _gw(cid)
-    args = {"external_ids": [f"at-{_TAG}-1", f"at-{_TAG}-2"], "reason": "leading zero dropped by spreadsheet"}
+    mixed = {"external_ids": [f"at-{_TAG}-1", f"at-{_TAG}-2", "invented-1"], "reason": "leading zero dropped"}
+    r = await gw.call("pad_postal_codes", mixed)
+    assert r.outcome is Outcome.INVALID_ARGS  # never reaches NEEDS_APPROVAL
+    assert f"at-{_TAG}-2" in r.observation["errors"][0] and "invented-1" in r.observation["errors"][0]
+
+
+async def test_pad_zip_needs_approval_then_edits_exactly_the_requested_donors(campaign):
+    cid, _ = campaign
+    gw = _gw(cid)
+    args = {"external_ids": [f"at-{_TAG}-1"], "reason": "leading zero dropped by spreadsheet"}
     assert (await gw.call("pad_postal_codes", args)).outcome is Outcome.NEEDS_APPROVAL
     async with db_session() as s:
         d = (await s.execute(select(Donor).where(Donor.external_id == f"at-{_TAG}-1"))).scalar_one()
         assert d.postal_code == "2134"  # untouched without approval
     r = await gw.call("pad_postal_codes", args, approved=True)
-    assert r.observation["changed"] == 1
-    assert r.observation["changes"][0] == {"external_id": f"at-{_TAG}-1", "before": "2134", "after": "02134"}
-    assert r.observation["skipped"] == [{"external_id": f"at-{_TAG}-2", "reason": "postal_code_not_4_digits"}]
+    assert r.observation["changes"] == [{"external_id": f"at-{_TAG}-1", "before": "2134", "after": "02134"}]
 
 
 async def test_launch_creates_runs_marks_queued_and_refuses_a_second_launch(campaign):

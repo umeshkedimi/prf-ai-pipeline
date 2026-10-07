@@ -175,3 +175,16 @@ async def test_run_budget_is_charged_for_what_launched_not_what_was_requested():
     gw = _gw(_spec("launch", Tier.ACT, launch, run_cost=lambda a: a.n), budget=Budget(max_runs=10))
     await gw.call("launch", {"n": 9})
     assert gw.budget.runs == 2
+
+
+async def test_precheck_refuses_before_the_approval_gate_so_a_human_is_never_asked():
+    async def fn(a):
+        return "done"
+
+    async def pre(a):
+        return "ids not eligible" if a.n == 0 else None
+
+    gw = _gw(_spec("edit", Tier.IRREVERSIBLE, fn, precheck=pre))
+    bad = await gw.call("edit", {"n": 0})
+    assert bad.outcome is Outcome.INVALID_ARGS and bad.observation == {"errors": ["ids not eligible"]}
+    assert (await gw.call("edit", {"n": 1})).outcome is Outcome.NEEDS_APPROVAL

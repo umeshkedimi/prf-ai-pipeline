@@ -42,12 +42,12 @@ def generate_campaign_rows(
     rows: list[dict] = []
     for i in range(n - dup_pairs):  # duplicates are appended after, as extra rows
         first, last = combos[i]
-        city, state, prefix = PLACES[i % len(PLACES)]
+        city, state, zip3 = PLACES[i % len(PLACES)]
         rows.append({
             "external_id": f"{prefix}-{i + 1:04d}", "first_name": first, "last_name": last,
             "email": f"{first}.{last}@example.org".lower(),
             "address_line1": f"{100 + i * 7} {STREETS[i % len(STREETS)]}",
-            "city": city, "state": state, "postal_code": f"{prefix}{rng.randint(10, 99)}",
+            "city": city, "state": state, "postal_code": f"{zip3}{rng.randint(10, 99)}",
             "do_not_contact": "false",
         })
 

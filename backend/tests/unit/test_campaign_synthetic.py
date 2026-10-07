@@ -36,3 +36,9 @@ def test_csv_round_trips_into_ingest_format():
     rows, _ = generate_campaign_rows(30, bad_zip=2, dup_pairs=1, unregistered=2, dnc=1)
     parsed = list(csv.DictReader(io.StringIO(rows_to_csv(rows))))
     assert parsed[0]["external_id"] and len(parsed) == len(rows)
+
+
+def test_id_prefix_is_honoured_so_concurrent_campaigns_cannot_collide():
+    rows, m = generate_campaign_rows(30, prefix="evabc", bad_zip=2, dup_pairs=1, unregistered=2, dnc=1)
+    assert all(r["external_id"].startswith("evabc-") for r in rows)
+    assert all(i.startswith("evabc-") for i in m["bad_zip_external_ids"])

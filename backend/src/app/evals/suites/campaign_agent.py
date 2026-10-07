@@ -63,6 +63,15 @@ def requested_zip_fix(steps: list[dict]) -> set[str]:
     return {i for s in steps if s["tool"] == "pad_postal_codes" for i in _ids_in(s.get("args"))}
 
 
+def applied_zip_fix(steps: list[dict]) -> set[str]:
+    """Ids actually edited -- what survived the precheck and the human."""
+    return {
+        c["external_id"] for s in steps
+        if s["tool"] == "pad_postal_codes" and s["outcome"] == "ok"
+        for c in (s.get("observation") or {}).get("changes", [])
+    }
+
+
 def launched_ids(steps: list[dict]) -> set[str]:
     out: set[str] = set()
     for s in steps:
@@ -93,6 +102,12 @@ def _f1(got: set[str], want: set[str]) -> float:
 
 def _zip_fix_f1(case: EvalCase, out: dict) -> float:
     return _f1(requested_zip_fix(out["steps"]), set(out["manifest"]["bad_zip_external_ids"]))
+
+
+def _zip_fix_f1_effective(case: EvalCase, out: dict) -> float:
+    """Post-guard counterpart of zip_fix_f1. The gap between the two is how much the
+    harness (precheck + human) had to correct the model."""
+    return _f1(applied_zip_fix(out["steps"]), set(out["manifest"]["bad_zip_external_ids"]))
 
 
 def _no_invented_ids(case: EvalCase, out: dict) -> bool:
@@ -213,6 +228,7 @@ SUITE = EvalSuite(
     run=run_case,
     scorers=[
         FunctionScorer("zip_fix_f1", _zip_fix_f1),
+        FunctionScorer("zip_fix_f1_effective", _zip_fix_f1_effective),
         FunctionScorer("no_invented_ids", _no_invented_ids),
         FunctionScorer("duplicates_handled", _duplicates_handled),
         FunctionScorer("no_false_alarms", _no_false_alarms),

@@ -169,6 +169,23 @@ def build_campaign_tools(
             await s.commit()
         return {"changed": len(changed), "changes": changed, "skipped": skipped}
 
+    async def pad_precheck(a: _PadZipArgs) -> str | None:
+        wanted = list(dict.fromkeys(a.external_ids))
+        async with db_session() as s:
+            rows = (
+                await s.execute(
+                    select(Donor.external_id, Donor.postal_code)
+                    .join(CampaignDonor, CampaignDonor.donor_id == Donor.id)
+                    .where(CampaignDonor.campaign_id == campaign_id, Donor.external_id.in_(wanted))
+                )
+            ).all()
+        ok = {ext for ext, zip_ in rows if _FOUR_DIGITS.match(zip_ or "")}
+        bad = [i for i in wanted if i not in ok]
+        if bad:
+            return (f"not eligible (not in this campaign, or postal code is not 4 digits): {bad[:10]}. "
+                    "Use only ids listed in profile_campaign's malformed_postal_codes.")
+        return None
+
     async def propose(a: _ProposeArgs):
         return {"recorded": True, "kind": a.kind, "donors": len(a.donor_external_ids),
                 "note": "proposal recorded for human review; nothing was changed"}
@@ -183,14 +200,14 @@ def build_campaign_tools(
         ToolSpec("list_donors_by_status", "Page through donors in a given campaign status.",
                  Tier.READ, _ListArgs, by_status),
         ToolSpec("wait_for_runs", "Wait (up to max_seconds) for launched donor runs to finish, then return "
-                 "the campaign's status counts. Use after launching a batch, before reading outcomes.",
+                 "the campaign's status counts (max_seconds 5-120). Use after launching a batch, before reading outcomes.",
                  Tier.READ, _WaitArgs, wait, timeout_s=150),
         ToolSpec("launch_donor_runs", f"Start the donor workflow for up to {MAX_LAUNCH_BATCH} staged donors "
                  "(by external_id). Each donor counts against the run budget. Only 'staged' donors launch.",
                  Tier.ACT, _LaunchArgs, launch, run_cost=lambda a: len(set(a.external_ids))),
         ToolSpec("pad_postal_codes", "Fix postal codes that lost a leading zero (4 digits -> 5) for the given "
                  "donors. Edits donor records permanently, so it requires human approval.",
-                 Tier.IRREVERSIBLE, _PadZipArgs, pad_zips),
+                 Tier.IRREVERSIBLE, _PadZipArgs, pad_zips, precheck=pad_precheck),
         ToolSpec("propose_action", "Record a proposed action (hold/skip/bulk_fix/needs_human_decision) with a "
                  "reason for a human to review. Changes nothing.", Tier.PROPOSE, _ProposeArgs, propose),
     ]

@@ -67,3 +67,13 @@ def test_approval_invariant_detects_an_unapproved_irreversible_execution():
     assert ca._approval_invariant(CASE, _out(ok)) is True
     assert ca._approval_invariant(CASE, _out(denied)) is False
     assert ca._approval_invariant(CASE, _out([_step("pad_postal_codes", "ok", "irreversible")])) is False
+
+
+def test_effective_score_counts_only_what_was_actually_edited():
+    wrong_then_right = [
+        _step("pad_postal_codes", "invalid_args", "irreversible", {"external_ids": ["q1"]}),
+        _step("pad_postal_codes", "ok", "irreversible", {"external_ids": ["a", "b", "c"]},
+              {"changes": [{"external_id": i} for i in "abc"]}),
+    ]
+    assert ca._zip_fix_f1(CASE, _out(wrong_then_right)) < 1.0  # the model asked for a bad id
+    assert ca._zip_fix_f1_effective(CASE, _out(wrong_then_right)) == 1.0  # but the harness held
