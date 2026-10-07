@@ -7,22 +7,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-AGENT_RUN_STATUSES = (
-    "running",
-    "awaiting_approval",  # paused on an irreversible tool call; see pending_approval
-    "completed",  # the agent finished and produced final_report
-    "completed_with_gaps",  # it stopped, but donors were still in flight or unaddressed
-    "budget_exhausted",
-    "stopped",  # a human stopped it
-    "failed",
-)
-
-
 class AgentRun(Base):
     """One campaign-agent run: the durable record of a long-lived loop. The loop's own
     resumable state lives in the LangGraph checkpointer (keyed by this id); this row
     carries what operators and the dashboard need -- status, budget usage, the call
-    awaiting a human, and the final report."""
+    awaiting a human, and the final report.
+
+    status: running | awaiting_approval (paused on an irreversible call, see
+    pending_approval) | completed | completed_with_gaps (it stopped, but donors were
+    still in flight or unaddressed) | budget_exhausted | stopped (a human stopped it) |
+    failed."""
 
     __tablename__ = "agent_runs"
 

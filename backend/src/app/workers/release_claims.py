@@ -47,14 +47,6 @@ def stale_cutoff(now: datetime | None = None) -> datetime:
     return (now or datetime.now(UTC)) - timedelta(seconds=get_settings().release_claim_ttl_seconds)
 
 
-def is_stale(claim: dict | None, now: datetime | None = None) -> bool:
-    """For callers holding a pdf_result (e.g. the dashboard's payload logic and
-    tests); the DB-side check below is what actually gates a takeover."""
-    if not claim or not claim.get("claimed_at"):
-        return False
-    return datetime.fromisoformat(claim["claimed_at"]) < stale_cutoff(now)
-
-
 def _stamp(claim: dict):
     return func.jsonb_set(
         WorkflowRun.result, _CLAIM_PATH, cast(literal(json.dumps(claim)), JSONB), True

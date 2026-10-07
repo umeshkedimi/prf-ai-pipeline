@@ -148,7 +148,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       CHECKPOINTER_DATABASE_URL: postgresql://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
-      REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp
@@ -205,7 +204,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
       CHECKPOINTER_DATABASE_URL: postgresql://${POSTGRES_USER:-prf}:${POSTGRES_PASSWORD:-prf}@postgres:5432/${POSTGRES_DB:-prf_ai_pipeline}
-      REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       MCP_CRM_URL: http://mcp-crm:8100/mcp

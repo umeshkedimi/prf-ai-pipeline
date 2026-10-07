@@ -16,17 +16,10 @@ class Settings(BaseSettings):
         env_file=_REPO_ROOT_ENV_FILE, env_file_encoding="utf-8", extra="ignore"
     )
 
-    postgres_user: str = "prf"
-    postgres_password: str = "prf"
-    postgres_db: str = "prf_ai_pipeline"
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-
     database_url: str = "postgresql+asyncpg://prf:prf@localhost:5432/prf_ai_pipeline"
     database_url_sync: str = "postgresql+psycopg://prf:prf@localhost:5432/prf_ai_pipeline"
     checkpointer_database_url: str = "postgresql://prf:prf@localhost:5432/prf_ai_pipeline"
 
-    redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
