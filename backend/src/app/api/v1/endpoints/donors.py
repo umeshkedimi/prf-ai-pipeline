@@ -1,11 +1,14 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.api.deps_auth import get_current_user, require_role
-from app.db.models import Donor, DonorImport, User, WorkflowRun
-from app.donors.csv_ingest import ingest_donors, parse_csv_rows
+from app.campaigns.membership import attach_donors_by_external_id
+from app.db.models import Campaign, Donor, DonorImport, User, WorkflowRun
+from app.donors.csv_ingest import ingest_donors, parse_csv_rows, validate_row
 from app.schemas.donors import DonorIngestResult, DonorUnrunRead
 
 router = APIRouter()
@@ -18,7 +21,10 @@ router = APIRouter()
     dependencies=[Depends(require_role("admin"))],
 )
 async def ingest_donors_csv(
-    file: UploadFile, session: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    file: UploadFile,
+    campaign_id: uuid.UUID | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> DonorIngestResult:
     """Admin-only: bulk-modifying the donor dataset is a more privileged
     action than the reviewer role's trigger/review/view scope. Stages donor
@@ -31,6 +37,8 @@ async def ingest_donors_csv(
     rows = parse_csv_rows(raw)
     if not rows:
         raise HTTPException(status_code=400, detail="CSV has no data rows")
+    if campaign_id is not None and await session.get(Campaign, campaign_id) is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
 
     result = await ingest_donors(session, rows)
 
@@ -41,8 +49,14 @@ async def ingest_donors_csv(
         rows_updated=result["updated"],
         rows_rejected=len(result["rejected"]),
         rejected_rows=result["rejected"],
+        campaign_id=campaign_id,
     )
     session.add(record)
+    await session.flush()
+    if campaign_id is not None:
+        # Rejected rows never reach the donors table, so only valid rows can be members.
+        valid_ids = [row["external_id"].strip() for row in rows if validate_row(row) is None]
+        await attach_donors_by_external_id(session, campaign_id, valid_ids, record.id)
     await session.commit()
     await session.refresh(record)
 
